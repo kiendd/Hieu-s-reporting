@@ -1,0 +1,22 @@
+# Config với token thật — không commit
+config.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Raw message dumps
+*.json
+!config.example.json
+
+# keywords.txt được commit (không nhạy cảm)
+
+# macOS
+.DS_Store
+
+# Claude Code session data
+.claude/
+
+# Generated Excel reports
+*.xlsx

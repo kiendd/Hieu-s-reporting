@@ -1,0 +1,674 @@
+#!/usr/bin/env python3
+"""
+FPT Chat ASM Report Tool
+Phân tích báo cáo hàng ngày của ASM từ lịch sử chat FPT Chat.
+
+Usage:
+    python fpt_chat_stats.py --today
+    python fpt_chat_stats.py --today --excel bao_cao.xlsx
+    python fpt_chat_stats.py --from 2026-04-01 --to 2026-04-16
+    python fpt_chat_stats.py --save raw.json
+    python fpt_chat_stats.py --load raw.json --today
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+from datetime import datetime, time, timezone
+
+try:
+    import requests
+except ImportError:
+    print("Thiếu thư viện 'requests'. Chạy: pip install requests", file=sys.stderr)
+    sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+def load_config(path: str) -> dict:
+    """Đọc config JSON. Trả về {} nếu file không tồn tại."""
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"Error: config file '{path}' không hợp lệ: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def extract_group_id(value: str) -> str:
+    """Trích group ID từ URL hoặc trả về nguyên nếu đã là ID."""
+    match = re.search(r'([a-f0-9]{24})', value)
+    return match.group(1) if match else value
+
+
+def parse_dt(iso: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def parse_date_arg(value: str, end_of_day: bool = False) -> datetime:
+    """Chuyển 'YYYY-MM-DD' thành datetime UTC có timezone."""
+    try:
+        d = datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        print(f"Error: định dạng ngày không hợp lệ '{value}'. Dùng YYYY-MM-DD.", file=sys.stderr)
+        sys.exit(1)
+    t = time(23, 59, 59) if end_of_day else time(0, 0, 0)
+    return datetime.combine(d, t, tzinfo=timezone.utc)
+
+
+def to_vn_str(iso: str) -> str:
+    """Chuyển ISO datetime thành chuỗi giờ VN (UTC+7)."""
+    dt = parse_dt(iso)
+    if not dt:
+        return iso
+    vn = datetime.fromtimestamp(dt.timestamp() + 7 * 3600, tz=timezone.utc)
+    return vn.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def fmt_date_range(date_from: datetime | None, date_to: datetime | None) -> str:
+    if not date_from and not date_to:
+        return "Toàn bộ lịch sử"
+    from_str = date_from.strftime("%Y-%m-%d") if date_from else "..."
+    to_str = date_to.strftime("%Y-%m-%d") if date_to else "..."
+    return f"{from_str} → {to_str}"
+
+
+def build_session(token: str) -> requests.Session:
+    session = requests.Session()
+    session.headers.update({
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    })
+    session.cookies.set("fchat_ddtk", token, domain="api-chat.fpt.com")
+    return session
+
+
+def filter_by_date(messages: list,
+                   date_from: datetime | None,
+                   date_to: datetime | None) -> list:
+    if not date_from and not date_to:
+        return messages
+    result = []
+    for m in messages:
+        dt = parse_dt(m.get("createdAt", ""))
+        if dt is None:
+            result.append(m)
+            continue
+        if date_from and dt < date_from:
+            continue
+        if date_to and dt > date_to:
+            continue
+        result.append(m)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Fetching
+# ---------------------------------------------------------------------------
+
+def fetch_page(session: requests.Session, base_url: str, group_id: str,
+               limit: int, before_inc=None) -> dict:
+    url = f"{base_url}/message-query/group/{group_id}/message"
+    params: dict = {"limit": limit}
+    if before_inc is not None:
+        params["messageIdInc"] = before_inc
+        params["cursorType"] = "PREVIOUS"
+    resp = session.get(url, params=params, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def fetch_group_members(session: requests.Session, base_url: str,
+                        group_id: str, limit: int = 50) -> list:
+    """Lấy toàn bộ thành viên group qua phân trang page-based."""
+    members = []
+    page = 1
+    print("[*] Fetching group members ...", file=sys.stderr)
+    while True:
+        url = f"{base_url}/group-management/group/{group_id}/participant"
+        try:
+            resp = session.get(url, params={"limit": limit, "page": page}, timeout=30)
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"  [!] Lỗi fetch group members (page {page}): {e}", file=sys.stderr)
+            return []
+        data = resp.json()
+        items = data if isinstance(data, list) else data.get(
+            "data", data.get("members", data.get("participants", data.get("items", [])))
+        )
+        if not items:
+            break
+        members.extend(items)
+        if len(items) < limit:
+            break
+        page += 1
+    print(f"[✓] {len(members)} thành viên", file=sys.stderr)
+    return members
+
+
+def fetch_all_messages(token: str, group_id: str,
+                       base_url: str = "https://api-chat.fpt.com",
+                       limit: int = 50,
+                       date_from: datetime | None = None) -> list:
+    """Lấy toàn bộ tin nhắn bằng cách phân trang ngược (oldest-first)."""
+    session = build_session(token)
+    all_messages = []
+    before_inc = None
+    page = 0
+
+    print(f"[*] Fetching messages từ group {group_id} ...", file=sys.stderr)
+
+    while True:
+        page += 1
+        data = fetch_page(session, base_url, group_id, limit, before_inc)
+        regulars = data.get("regulars", [])
+
+        if not regulars:
+            break
+
+        all_messages = regulars + all_messages
+        fetched = len(regulars)
+        oldest_dt = parse_dt(regulars[0].get("createdAt", ""))
+        oldest_str = oldest_dt.strftime("%Y-%m-%d") if oldest_dt else "?"
+        print(f"  Page {page}: +{fetched} messages (total: {len(all_messages)}, oldest: {oldest_str})",
+              file=sys.stderr)
+
+        if fetched < limit:
+            break
+
+        if date_from and oldest_dt and oldest_dt < date_from:
+            print(f"  [✓] Đã đủ dữ liệu từ {date_from.strftime('%Y-%m-%d')}, dừng fetch.",
+                  file=sys.stderr)
+            break
+
+        before_inc = regulars[0]["messageIdInc"]
+
+    print(f"[✓] Tổng: {len(all_messages)} messages", file=sys.stderr)
+    return all_messages
+
+
+# ---------------------------------------------------------------------------
+# ASM Report Analysis
+# ---------------------------------------------------------------------------
+
+def detect_asm_reports(messages: list) -> list:
+    """Lọc tin nhắn TEXT là báo cáo ASM (heuristic: có 'shop' + số cọc)."""
+    result = []
+    for msg in messages:
+        if msg.get("type") != "TEXT":
+            continue
+        content = msg.get("content") or ""
+        if (re.search(r'shop', content, re.IGNORECASE)
+                and re.search(r'\d+\s*cọc|cọc\s*\d+', content, re.IGNORECASE)):
+            result.append(msg)
+    return result
+
+
+def _extract_sections(content: str) -> dict:
+    """Trích xuất các mục báo cáo theo pattern '- Label: content'."""
+    sections = {}
+    pattern = re.compile(
+        r'[-–•]\s*([^:\n]+?)\s*[:：]\s*(.*?)(?=\n\s*[-–•]|\Z)',
+        re.DOTALL,
+    )
+    for m in pattern.finditer(content):
+        label = m.group(1).strip().lower()
+        text = m.group(2).strip()
+        sections[label] = text
+    return sections
+
+
+def parse_asm_report(msg: dict) -> dict:
+    """Parse một tin nhắn báo cáo ASM, trả về dict các field cấu trúc."""
+    content = msg.get("content") or ""
+    user = msg.get("user") or {}
+
+    shop_match = re.search(r'shop\s*[:：]?\s*([^\n]+)', content, re.IGNORECASE)
+    shop_ref = shop_match.group(1).strip() if shop_match else None
+
+    coc_match = re.search(r'(\d+)\s*cọc|cọc\s*(\d+)', content, re.IGNORECASE)
+    deposit_count = None
+    if coc_match:
+        deposit_count = int(coc_match.group(1) or coc_match.group(2))
+
+    sections = _extract_sections(content)
+
+    def get_section(*labels):
+        for lbl in labels:
+            for key in sections:
+                if lbl in key:
+                    return sections[key]
+        return None
+
+    if shop_ref is None or deposit_count is None:
+        print(f"  [!] Không parse được shop/cọc từ message {msg.get('id', '?')}", file=sys.stderr)
+
+    return {
+        "shop_ref": shop_ref,
+        "deposit_count": deposit_count,
+        "tich_cuc": get_section("tích cực"),
+        "van_de": get_section("vấn đề"),
+        "da_lam": get_section("đã làm"),
+        "sender": user.get("displayName", "Unknown"),
+        "sender_id": user.get("id", ""),
+        "sent_at": msg.get("createdAt", ""),
+        "message_id": msg.get("id", ""),
+    }
+
+
+def analyze_asm_reports(parsed_reports: list,
+                        deposit_low: int = 2, deposit_high: int = 5) -> dict:
+    """Phân tích báo cáo ASM: lọc shop theo đặt cọc, thu thập ý tưởng, highlight."""
+    all_shops, low_deposit_shops, high_deposit_shops = [], [], []
+    ideas, tich_cuc_list, han_che_list = [], [], []
+
+    for r in parsed_reports:
+        dep = r.get("deposit_count")
+        if dep is not None:
+            if dep < deposit_low:
+                level = "Thấp"
+            elif dep > deposit_high:
+                level = "Cao"
+            else:
+                level = "Bình thường"
+            entry = {"shop_ref": r["shop_ref"], "deposit_count": dep,
+                     "sender": r["sender"], "level": level}
+            all_shops.append(entry)
+            if level == "Thấp":
+                low_deposit_shops.append(entry)
+            elif level == "Cao":
+                high_deposit_shops.append(entry)
+
+        if r.get("da_lam"):
+            ideas.append({
+                "sender": r["sender"], "shop_ref": r["shop_ref"],
+                "da_lam": r["da_lam"], "sent_at": r["sent_at"],
+            })
+
+        if r.get("tich_cuc"):
+            tich_cuc_list.append({
+                "sender": r["sender"], "shop_ref": r["shop_ref"], "content": r["tich_cuc"],
+            })
+
+        if r.get("van_de"):
+            han_che_list.append({
+                "sender": r["sender"], "shop_ref": r["shop_ref"], "content": r["van_de"],
+            })
+
+    return {
+        "all_shops": all_shops,
+        "low_deposit_shops": low_deposit_shops,
+        "high_deposit_shops": high_deposit_shops,
+        "ideas": ideas,
+        "highlights": {"tich_cuc": tich_cuc_list, "han_che": han_che_list},
+        "missing_reporters": None,  # None = chưa kiểm tra; [] = tất cả đã báo cáo
+    }
+
+
+def check_asm_compliance(parsed_reports: list, members: list,
+                         target_date_str: str, deadline_hhmm: str = "20:00",
+                         skip_list: list | None = None) -> list:
+    """Trả về displayName của thành viên chưa gửi báo cáo trước deadline."""
+    VN_OFFSET = 7 * 3600
+    try:
+        deadline_h, deadline_m = map(int, deadline_hhmm.split(":"))
+        target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+    except ValueError as e:
+        print(f"  [!] Tham số không hợp lệ: {e}", file=sys.stderr)
+        return []
+
+    reported = set()
+    for r in parsed_reports:
+        dt = parse_dt(r.get("sent_at", ""))
+        if not dt:
+            continue
+        vn_dt = datetime.fromtimestamp(dt.timestamp() + VN_OFFSET, tz=timezone.utc)
+        if vn_dt.date() != target_date:
+            continue
+        if vn_dt.hour > deadline_h or (vn_dt.hour == deadline_h and vn_dt.minute >= deadline_m):
+            continue
+        reported.add(r["sender"].strip().lower())
+
+    skip = [s.lower() for s in (skip_list or [])]
+    missing = []
+    for m in members:
+        name = (m.get("displayName") or "").strip()
+        if not name:
+            continue
+        name_lower = name.lower()
+        if any(s in name_lower for s in skip):
+            continue
+        if not any(name_lower in rn or rn in name_lower for rn in reported):
+            missing.append(name)
+    return missing
+
+
+# ---------------------------------------------------------------------------
+# Report Output
+# ---------------------------------------------------------------------------
+
+def print_asm_report(asm_data: dict,
+                     date_from: datetime | None = None,
+                     date_to: datetime | None = None) -> None:
+    sep = "=" * 65
+    print(sep)
+    print("  FPT CHAT - BÁO CÁO ASM")
+    print(sep)
+
+    print(f"\n{'TỔNG QUAN':=<40}")
+    print(f"  Khoảng thời gian : {fmt_date_range(date_from, date_to)}")
+    print(f"  Báo cáo ASM      : {len(asm_data.get('all_shops', []))}")
+
+    low_shops  = asm_data.get("low_deposit_shops", [])
+    high_shops = asm_data.get("high_deposit_shops", [])
+    ideas      = asm_data.get("ideas", [])
+    tich_cuc   = asm_data.get("highlights", {}).get("tich_cuc", [])
+    han_che    = asm_data.get("highlights", {}).get("han_che", [])
+    missing    = asm_data.get("missing_reporters")
+
+    print(f"\n{'SHOP ĐẶT CỌC THẤP (< ngưỡng)':=<40}")
+    if low_shops:
+        for s in sorted(low_shops, key=lambda x: x["deposit_count"]):
+            print(f"  [{s['deposit_count']:>3} đặt cọc] {s['shop_ref']}  — {s['sender']}")
+    else:
+        print("  (không có)")
+
+    print(f"\n{'SHOP ĐẶT CỌC CAO (> ngưỡng)':=<40}")
+    if high_shops:
+        for s in sorted(high_shops, key=lambda x: x["deposit_count"], reverse=True):
+            print(f"  [{s['deposit_count']:>3} đặt cọc] {s['shop_ref']}  — {s['sender']}")
+    else:
+        print("  (không có)")
+
+    print(f"\n{'Ý TƯỞNG TRIỂN KHAI TỪ ASM':=<40}")
+    if ideas:
+        for i, idea in enumerate(ideas, 1):
+            print(f"  {i}. [{idea['sender']}] Shop: {idea['shop_ref']}")
+            for line in idea["da_lam"].splitlines():
+                if line.strip():
+                    print(f"     {line.strip()}")
+    else:
+        print("  (không có)")
+
+    print(f"\n{'ĐIỂM TÍCH CỰC':=<40}")
+    if tich_cuc:
+        for i, h in enumerate(tich_cuc, 1):
+            print(f"  {i}. [{h['sender']}] Shop: {h['shop_ref']}")
+            for line in h["content"].splitlines():
+                if line.strip():
+                    print(f"     {line.strip()}")
+    else:
+        print("  (không có)")
+
+    print(f"\n{'ĐIỂM HẠN CHẾ':=<40}")
+    if han_che:
+        for i, h in enumerate(han_che, 1):
+            print(f"  {i}. [{h['sender']}] Shop: {h['shop_ref']}")
+            for line in h["content"].splitlines():
+                if line.strip():
+                    print(f"     {line.strip()}")
+    else:
+        print("  (không có)")
+
+    if missing is not None:
+        print(f"\n{'ASM CHƯA BÁO CÁO':=<40}")
+        if missing:
+            for name in missing:
+                print(f"  - {name}")
+        else:
+            print("  Tất cả ASM đã báo cáo")
+
+    print(f"\n{sep}")
+
+
+# ---------------------------------------------------------------------------
+# Excel Export
+# ---------------------------------------------------------------------------
+
+def write_asm_excel(asm_data: dict, path: str) -> None:
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        print("Thiếu thư viện 'openpyxl'. Chạy: pip install openpyxl", file=sys.stderr)
+        sys.exit(1)
+
+    def style_header(ws):
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill("solid", fgColor="D9E1F2")
+            cell.alignment = Alignment(horizontal="center")
+        ws.freeze_panes = "A2"
+
+    def set_widths(ws, widths: dict):
+        for col_idx, width in widths.items():
+            ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    def wrap_col(ws, col: int):
+        for row in ws.iter_rows(min_row=2, min_col=col, max_col=col):
+            for cell in row:
+                cell.alignment = Alignment(wrap_text=True)
+
+    wb = Workbook()
+
+    # ── Sheet 1: Shop Đặt Cọc ─────────────────────────────────────────────
+    ws1 = wb.active
+    ws1.title = "Shop Đặt Cọc"
+    ws1.append(["STT", "Shop", "Số đặt cọc", "Mức", "ASM"])
+    style_header(ws1)
+    all_shops = sorted(asm_data.get("all_shops", []),
+                       key=lambda x: x["deposit_count"], reverse=True)
+    for i, s in enumerate(all_shops, 1):
+        ws1.append([i, s["shop_ref"], s["deposit_count"], s["level"], s["sender"]])
+    set_widths(ws1, {1: 6, 2: 50, 3: 14, 4: 14, 5: 35})
+
+    # ── Sheet 2: Ý tưởng ASM ──────────────────────────────────────────────
+    ws2 = wb.create_sheet("Ý tưởng ASM")
+    ws2.append(["STT", "ASM", "Shop", "Nội dung", "Ngày giờ (UTC+7)"])
+    style_header(ws2)
+    for i, idea in enumerate(asm_data.get("ideas", []), 1):
+        ws2.append([i, idea["sender"], idea["shop_ref"],
+                    idea["da_lam"], to_vn_str(idea["sent_at"])])
+    set_widths(ws2, {1: 6, 2: 30, 3: 40, 4: 80, 5: 22})
+    wrap_col(ws2, 4)
+
+    # ── Sheet 3: Điểm nổi bật ─────────────────────────────────────────────
+    ws3 = wb.create_sheet("Điểm nổi bật")
+    ws3.append(["STT", "ASM", "Shop", "Loại", "Nội dung"])
+    style_header(ws3)
+    highlights = (
+        [(h["sender"], h["shop_ref"], "Tích cực", h["content"])
+         for h in asm_data.get("highlights", {}).get("tich_cuc", [])]
+        + [(h["sender"], h["shop_ref"], "Hạn chế", h["content"])
+           for h in asm_data.get("highlights", {}).get("han_che", [])]
+    )
+    for i, (sender, shop, loai, content) in enumerate(highlights, 1):
+        ws3.append([i, sender, shop, loai, content])
+    set_widths(ws3, {1: 6, 2: 30, 3: 40, 4: 12, 5: 80})
+    wrap_col(ws3, 5)
+
+    # ── Sheet 4: ASM chưa báo cáo ─────────────────────────────────────────
+    ws4 = wb.create_sheet("ASM chưa báo cáo")
+    ws4.append(["STT", "Tên ASM"])
+    style_header(ws4)
+    missing = asm_data.get("missing_reporters")
+    if missing is None:
+        ws4.append(["", "(Không thể kiểm tra — thiếu token/group)"])
+    elif not missing:
+        ws4.append(["", "Tất cả ASM đã báo cáo"])
+    else:
+        for i, name in enumerate(missing, 1):
+            ws4.append([i, name])
+    set_widths(ws4, {1: 6, 2: 45})
+
+    wb.save(path)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--config", default="config.json")
+    pre_args, _ = pre.parse_known_args()
+    cfg = load_config(pre_args.config)
+
+    parser = argparse.ArgumentParser(
+        description="FPT Chat ASM Report Tool — phân tích báo cáo hàng ngày của ASM",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Ví dụ:
+  python fpt_chat_stats.py --today
+  python fpt_chat_stats.py --today --excel bao_cao.xlsx
+  python fpt_chat_stats.py --from 2026-04-01 --to 2026-04-16
+  python fpt_chat_stats.py --save raw.json
+  python fpt_chat_stats.py --load raw.json --today
+        """,
+    )
+    parser.add_argument("--config", default="config.json")
+    parser.add_argument("--token", default=None,
+                        help="Token xác thực (fchat_ddtk). Ưu tiên hơn config file.")
+    parser.add_argument("--group", default=None,
+                        help="Group ID hoặc URL chat group.")
+    parser.add_argument("--api-url", default=None,
+                        help="Base URL của API (mặc định: https://api-chat.fpt.com)")
+    parser.add_argument("--limit", type=int, default=50,
+                        help="Số tin nhắn mỗi trang API (mặc định: 50)")
+    parser.add_argument("--from", dest="date_from", default=None, metavar="YYYY-MM-DD",
+                        help="Chỉ phân tích từ ngày này (inclusive)")
+    parser.add_argument("--to", dest="date_to", default=None, metavar="YYYY-MM-DD",
+                        help="Chỉ phân tích đến ngày này (inclusive)")
+    parser.add_argument("--today", action="store_true",
+                        help="Phân tích hôm nay (giờ VN). Không dùng kèm --from/--to/--date.")
+    parser.add_argument("--save", metavar="FILE",
+                        help="Lưu raw messages ra file JSON")
+    parser.add_argument("--load", metavar="FILE",
+                        help="Dùng file JSON đã lưu (offline)")
+    parser.add_argument("--excel", metavar="FILE",
+                        help="Xuất báo cáo Excel (.xlsx) với 4 sheet ASM")
+    parser.add_argument("--deposit-low", dest="deposit_low",
+                        type=int, default=cfg.get("asm_deposit_low", 2), metavar="N",
+                        help="Ngưỡng đặt cọc thấp — shop có deposit < N (mặc định: 2)")
+    parser.add_argument("--deposit-high", dest="deposit_high",
+                        type=int, default=cfg.get("asm_deposit_high", 5), metavar="N",
+                        help="Ngưỡng đặt cọc cao — shop có deposit > N (mặc định: 5)")
+    parser.add_argument("--asm-deadline", default="20:00", metavar="HH:MM",
+                        help="Deadline báo cáo hàng ngày (mặc định: 20:00, giờ VN)")
+    parser.add_argument("--date", default=None, metavar="YYYY-MM-DD",
+                        help="Ngày kiểm tra compliance (mặc định: hôm nay giờ VN)")
+    parser.add_argument("--skip-reporters", default="", metavar="NAMES",
+                        help="Tên cách nhau bằng dấu phẩy — loại khỏi compliance check")
+
+    args = parser.parse_args()
+
+    token   = args.token   or cfg.get("token")
+    group   = args.group   or cfg.get("group")
+    api_url = args.api_url or cfg.get("api_url", "https://api-chat.fpt.com")
+
+    # ── Validate (chỉ khi cần gọi API)
+    if not args.load:
+        if not token:
+            print("Error: --token là bắt buộc (hoặc set 'token' trong config.json)", file=sys.stderr)
+            sys.exit(1)
+        if not group:
+            print("Error: --group là bắt buộc (hoặc set 'group' trong config.json)", file=sys.stderr)
+            sys.exit(1)
+
+    # ── --today shortcut
+    if args.today:
+        if args.date_from or args.date_to or args.date:
+            print("Error: --today không thể dùng kèm --from, --to, hoặc --date", file=sys.stderr)
+            sys.exit(1)
+        import time as _time
+        _vn_today = datetime.fromtimestamp(
+            _time.time() + 7 * 3600, tz=timezone.utc
+        ).strftime("%Y-%m-%d")
+        args.date_from = _vn_today
+        args.date_to   = _vn_today
+        args.date      = _vn_today
+
+    # ── Skip reporters: merge config + CLI
+    skip_list = list(cfg.get("asm_skip_reporters", []))
+    if args.skip_reporters:
+        skip_list += [n.strip() for n in args.skip_reporters.split(",") if n.strip()]
+
+    date_from = parse_date_arg(args.date_from, end_of_day=False) if args.date_from else None
+    date_to   = parse_date_arg(args.date_to,   end_of_day=True)  if args.date_to   else None
+
+    # ── Fetch messages
+    if args.load:
+        print(f"[*] Loading từ file: {args.load}", file=sys.stderr)
+        with open(args.load, encoding="utf-8") as f:
+            messages = json.load(f)
+        print(f"[✓] Loaded {len(messages)} messages", file=sys.stderr)
+    else:
+        group_id = extract_group_id(group)
+        messages = fetch_all_messages(token=token, group_id=group_id,
+                                      base_url=api_url, limit=args.limit,
+                                      date_from=date_from)
+
+    # ── Save raw
+    if args.save:
+        with open(args.save, "w", encoding="utf-8") as f:
+            json.dump(messages, f, ensure_ascii=False, indent=2)
+        print(f"[✓] Đã lưu raw messages → {args.save}", file=sys.stderr)
+
+    # ── Filter by date range
+    messages = filter_by_date(messages, date_from, date_to)
+
+    # ── ASM analysis (always)
+    asm_msgs = detect_asm_reports(messages)
+    print(f"[*] Phát hiện {len(asm_msgs)} báo cáo ASM", file=sys.stderr)
+    if not asm_msgs:
+        print("  [!] Không tìm thấy báo cáo ASM nào.", file=sys.stderr)
+
+    parsed_reports = [parse_asm_report(m) for m in asm_msgs]
+    asm_data = analyze_asm_reports(parsed_reports,
+                                   deposit_low=args.deposit_low,
+                                   deposit_high=args.deposit_high)
+
+    # ── Compliance check
+    if token and group:
+        _session = build_session(token)
+        members = fetch_group_members(_session, api_url, extract_group_id(group))
+    else:
+        print("[!] Thiếu --token/--group — bỏ qua kiểm tra compliance", file=sys.stderr)
+        members = []
+
+    if members:
+        import time as _time
+        target_date = args.date or datetime.fromtimestamp(
+            _time.time() + 7 * 3600, tz=timezone.utc
+        ).strftime("%Y-%m-%d")
+        asm_data["missing_reporters"] = check_asm_compliance(
+            parsed_reports, members, target_date, args.asm_deadline, skip_list,
+        )
+
+    # ── Output
+    print_asm_report(asm_data, date_from, date_to)
+
+    if args.excel:
+        write_asm_excel(asm_data, args.excel)
+        print(f"[✓] Đã xuất Excel → {args.excel}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

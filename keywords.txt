@@ -1,0 +1,18 @@
+# Mỗi dòng là một keyword nhận diện tin nhắn request
+# Dòng bắt đầu bằng # là comment, bị bỏ qua
+# Match case-insensitive, bất kỳ đâu trong nội dung tin nhắn
+
+lấy giúp
+report
+tải hộ
+tải giúp
+tải file
+hỗ trợ
+down hộ
+down giúp
+down link
+down file
+download
+nhờ chị
+nhờ anh
+nhờ em
