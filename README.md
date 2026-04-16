@@ -37,8 +37,9 @@ cp config.example.json config.json
 ## Lấy token
 
 1. Mở FPT Chat trên trình duyệt, đăng nhập.
-2. Mở DevTools (F12) → tab **Application** → **Cookies** → `api-chat.fpt.com`.
-3. Sao chép giá trị cookie `fchat_ddtk`.
+2. Mở DevTools (F12) → tab **Network**, tải lại trang hoặc gửi một tin nhắn bất kỳ.
+3. Chọn một request bất kỳ đến `api-chat.fpt.com` → tab **Headers**.
+4. Tìm header `Authorization: Bearer <token>` và sao chép phần `<token>`.
 
 > Token có thời hạn — nếu gặp lỗi `401 Unauthorized`, lấy lại token mới từ trình duyệt.
 
