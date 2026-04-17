@@ -66,10 +66,13 @@ Trình duyệt sẽ tự mở trang web của công cụ. Điền token và Grou
 
 ## Lấy token
 
-1. Mở FPT Chat trên trình duyệt, đăng nhập.
-2. Mở DevTools (F12) → tab **Network**, tải lại trang hoặc gửi một tin nhắn bất kỳ.
-3. Chọn một request bất kỳ đến `api-chat.fpt.com` → tab **Headers**.
-4. Tìm header `Authorization: Bearer <token>` và sao chép phần `<token>`.
+![Hướng dẫn lấy token FPT Chat](docs/huong-dan-lay-token.png)
+
+1. Mở FPT Chat trên trình duyệt → nhấn **F12** mở DevTools → chọn tab **Network**
+2. Chọn tiếp thẻ **Fetch/XHR** → nhấn **F5** (hoặc Cmd+R) để refresh trang
+3. Chọn một request bất kỳ trong danh sách, ví dụ `settings`
+4. Chọn tab **Headers** trong panel bên phải
+5. Kéo xuống tìm dòng **Authorization** → sao chép toàn bộ phần sau chữ `Bearer ` (không lấy chữ Bearer)
 
 > Token có thời hạn — nếu gặp lỗi `401 Unauthorized`, lấy lại token mới từ trình duyệt.
 
