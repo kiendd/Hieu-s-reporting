@@ -4,9 +4,33 @@ Chạy: streamlit run app.py
 """
 
 import io
+import json
+import os
 from datetime import date, datetime, timezone
 
 import streamlit as st
+
+# ── Config persistence ────────────────────────────────────────────────────────
+_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+
+def _load_config() -> dict:
+    if os.path.exists(_CONFIG_PATH):
+        try:
+            with open(_CONFIG_PATH, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def _save_config(token: str, group: str) -> None:
+    cfg = _load_config()
+    cfg["token"] = token
+    cfg["group"] = group
+    try:
+        with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        st.warning(f"Không lưu được config: {e}")
 
 # ── Import core logic từ fpt_chat_stats ──────────────────────────────────────
 try:
@@ -39,10 +63,12 @@ st.caption("Phân tích báo cáo hàng ngày của ASM từ FPT Chat")
 st.divider()
 
 # ── Vùng 1: Kết nối ──────────────────────────────────────────────────────────
+_cfg = _load_config()
 col_token, col_group = st.columns(2)
 with col_token:
     token = st.text_input(
         "Token (Bearer)",
+        value=_cfg.get("token", ""),
         type="password",
         placeholder="Dán token từ DevTools vào đây",
         help="DevTools → Network → chọn request api-chat.fpt.com → Headers → Authorization: Bearer <token>",
@@ -50,6 +76,7 @@ with col_token:
 with col_group:
     group = st.text_input(
         "Group ID hoặc URL nhóm chat",
+        value=_cfg.get("group", ""),
         placeholder="686b517a54ca42cb3c30e1df hoặc URL đầy đủ",
     )
 
@@ -94,6 +121,8 @@ if run:
     if not group:
         st.error("Vui lòng nhập Group ID hoặc URL.")
         st.stop()
+
+    _save_config(token, group)
 
     # Tính date range
     VN_OFFSET = 7 * 3600
