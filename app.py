@@ -73,30 +73,24 @@ st.set_page_config(
     layout="centered",
 )
 
-st.title("📊 FPT Chat ASM Report")
-st.caption("Phân tích báo cáo hàng ngày của ASM từ FPT Chat")
-
-# Ẩn iframe của streamlit-javascript (height=0 nhưng vẫn chiếm không gian)
+# Đọc localStorage trước khi render bất kỳ thứ gì visible,
+# đồng thời inject CSS ẩn hoàn toàn các iframe do streamlit-javascript tạo ra
 st.markdown("""
 <style>
-div[data-testid="stCustomComponentV1"] {
-    height: 0 !important;
-    min-height: 0 !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    overflow: hidden !important;
+div[data-testid="stElementContainer"]:has(iframe[data-testid="stCustomComponentV1"]) {
+    display: none !important;
 }
 </style>
 """, unsafe_allow_html=True)
-
-# ── Vùng 1: Kết nối ──────────────────────────────────────────────────────────
-# Token: localStorage (browser) — không bao giờ đọc/ghi file
-# Group: localStorage → config.json (local fallback)
 _cfg = _load_config()
 _saved_token = _ls_get("fpt_token")
 _saved_group = _ls_get("fpt_group") or _cfg.get("group", "")
 
+st.title("📊 FPT Chat ASM Report")
+st.caption("Phân tích báo cáo hàng ngày của ASM từ FPT Chat")
 st.divider()
+
+# ── Vùng 1: Kết nối ──────────────────────────────────────────────────────────
 
 col_token, col_group = st.columns(2)
 with col_token:
