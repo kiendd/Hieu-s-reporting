@@ -6,50 +6,40 @@ Chạy: streamlit run app.py
 import io
 import json
 import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
 import streamlit as st
-import extra_streamlit_components as stx
+from streamlit_javascript import st_javascript
 
-# ── Môi trường: local (có config.json) hay cloud ─────────────────────────────
+# ── localStorage helpers (browser-side, mỗi user riêng, không gửi lên server) ─
+def _ls_get(key: str) -> str:
+    """Đọc giá trị từ localStorage của browser. Trả '' nếu chưa có."""
+    val = st_javascript(f"localStorage.getItem({json.dumps(key)}) || ''")
+    return val if isinstance(val, str) else ""
+
+def _ls_set(key: str, value: str) -> None:
+    """Ghi giá trị vào localStorage của browser."""
+    st_javascript(f"localStorage.setItem({json.dumps(key)}, {json.dumps(value)}); 'ok'")
+
+# ── Config file (local only, group ID only — token không bao giờ ghi file) ───
 _CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-_IS_LOCAL = os.path.isfile(_CONFIG_PATH)
 
-# ── Cookie manager (browser-side, mỗi user riêng) ────────────────────────────
-@st.cache_resource
-def _get_cookie_manager():
-    return stx.CookieManager(key="fpt_asm")
-
-_cm = _get_cookie_manager()
-
-def _cookie_get(key: str) -> str:
-    try:
-        return _cm.get(key) or ""
-    except Exception:
-        return ""
-
-def _cookie_set(key: str, value: str) -> None:
-    try:
-        _cm.set(key, value, expires_at=datetime.now() + timedelta(days=90))
-    except Exception:
-        pass
-
-# ── Config file (chỉ dùng local, không lưu token) ────────────────────────────
 def _load_config() -> dict:
-    if _IS_LOCAL:
+    if os.path.isfile(_CONFIG_PATH):
         try:
             with open(_CONFIG_PATH, encoding="utf-8") as f:
-                return json.load(f)
+                cfg = json.load(f)
+            cfg.pop("token", None)  # xoá token cũ nếu còn sót
+            return cfg
         except Exception:
             pass
     return {}
 
 def _save_group_local(group: str) -> None:
     """Lưu group vào config.json khi chạy local. Token không bao giờ ghi file."""
-    if not _IS_LOCAL:
+    if not os.path.isfile(_CONFIG_PATH):
         return
     cfg = _load_config()
-    cfg.pop("token", None)   # xoá token cũ nếu còn sót
     cfg["group"] = group
     try:
         with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -88,11 +78,11 @@ st.caption("Phân tích báo cáo hàng ngày của ASM từ FPT Chat")
 st.divider()
 
 # ── Vùng 1: Kết nối ──────────────────────────────────────────────────────────
-# Token: ưu tiên cookie (browser) — không bao giờ đọc từ file
-# Group: cookie → config.json (local fallback)
+# Token: localStorage (browser) — không bao giờ đọc/ghi file
+# Group: localStorage → config.json (local fallback)
 _cfg = _load_config()
-_saved_token = _cookie_get("token")
-_saved_group = _cookie_get("group") or _cfg.get("group", "")
+_saved_token = _ls_get("fpt_token")
+_saved_group = _ls_get("fpt_group") or _cfg.get("group", "")
 
 col_token, col_group = st.columns(2)
 with col_token:
@@ -152,9 +142,9 @@ if run:
         st.error("Vui lòng nhập Group ID hoặc URL.")
         st.stop()
 
-    # Lưu vào cookie (browser, mỗi user riêng, 90 ngày)
-    _cookie_set("token", token)
-    _cookie_set("group", group)
+    # Lưu vào localStorage (browser, mỗi user riêng, không gửi lên server)
+    _ls_set("fpt_token", token)
+    _ls_set("fpt_group", group)
     # Lưu group vào config.json khi chạy local (không lưu token)
     _save_group_local(group)
 
