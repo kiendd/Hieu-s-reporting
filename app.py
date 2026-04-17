@@ -502,6 +502,12 @@ if run:
         _d1_deps  = asm_data_d1["total_deposits"]  if asm_data_d1 else None
         _d1_tiem  = asm_data_d1["total_ra_tiem"]   if asm_data_d1 else None
 
+        # Task 1: D-1 shop lookup map (shop_ref -> deposit_count)
+        d1_shop_map = (
+            {s["shop_ref"]: s["deposit_count"] for s in asm_data_d1["all_shops"]}
+            if asm_data_d1 else None
+        )
+
         col_a, col_b, col_c, col_d, col_e, col_f = st.columns(6)
         col_a.metric("Báo cáo ASM",   len(asm_msgs))
         col_b.metric("Tổng cọc",      asm_data["total_deposits"],
@@ -515,38 +521,51 @@ if run:
         if not asm_msgs:
             st.warning("Không tìm thấy báo cáo ASM nào trong khoảng thời gian này.")
 
+        # ── Chưa báo cáo đến hiện tại (Task 5) ────────────────────────────────
+        if unreported_now is not None:
+            st.subheader("⏳ Chưa báo cáo đến hiện tại")
+            if unreported_now:
+                st.dataframe(
+                    [{"Tên thành viên": name} for name in unreported_now],
+                    use_container_width=True, hide_index=True,
+                )
+            else:
+                st.success("Tất cả đã báo cáo")
+
         # ── Nhân viên không phát sinh cọc ──────────────────────────────────────
         no_dep = asm_data.get("no_deposit_shops", [])
-        unrpt  = asm_data.get("unreported_now")
-        if no_dep or (unrpt is not None and unrpt):
-            st.subheader("🚫 Nhân viên không phát sinh cọc")
-            sub_a, sub_b = st.columns(2)
-            with sub_a:
-                st.markdown("**Shop báo cáo 0 cọc**")
-                if no_dep:
-                    st.dataframe(
-                        [{"ASM": s["sender"], "Shop": s["shop_ref"]} for s in no_dep],
-                        use_container_width=True, hide_index=True,
-                    )
-                else:
-                    st.caption("(không có)")
-            with sub_b:
-                st.markdown("**Thành viên chưa báo cáo đến hiện tại**")
-                if unrpt:
-                    st.dataframe(
-                        [{"Tên thành viên": name} for name in unrpt],
-                        use_container_width=True, hide_index=True,
-                    )
-                else:
-                    st.caption("(không có)")
+        if no_dep:
+            st.subheader("🚫 Shop báo cáo 0 cọc")
+            st.dataframe(
+                [{"ASM": s["sender"], "Shop": s["shop_ref"]} for s in no_dep],
+                use_container_width=True, hide_index=True,
+            )
 
-        # ── Nhân viên cọc tốt ──────────────────────────────────────────────────
+        # ── Shop cọc thấp (Task 3) ─────────────────────────────────────────────
+        low_shops = asm_data.get("low_deposit_shops", [])
+        if low_shops:
+            st.subheader("📉 Shop cọc thấp")
+            def _low_row(s):
+                row = {"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
+                if d1_shop_map is not None:
+                    row["Cọc D-1"] = d1_shop_map.get(s["shop_ref"], "—")
+                return row
+            st.dataframe(
+                [_low_row(s) for s in sorted(low_shops, key=lambda x: x["deposit_count"])],
+                use_container_width=True, hide_index=True,
+            )
+
+        # ── Nhân viên cọc tốt (Task 4) ─────────────────────────────────────────
         high_shops = asm_data.get("high_deposit_shops", [])
         if high_shops:
             st.subheader("🏆 Nhân viên phát sinh cọc tốt")
+            def _high_row(s):
+                row = {"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
+                if d1_shop_map is not None:
+                    row["Cọc D-1"] = d1_shop_map.get(s["shop_ref"], "—")
+                return row
             st.dataframe(
-                [{"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
-                 for s in sorted(high_shops, key=lambda x: x["deposit_count"], reverse=True)],
+                [_high_row(s) for s in sorted(high_shops, key=lambda x: x["deposit_count"], reverse=True)],
                 use_container_width=True, hide_index=True,
             )
 
@@ -558,13 +577,17 @@ if run:
                 use_container_width=True, hide_index=True,
             )
 
-        # ── Shop đặt cọc ───────────────────────────────────────────────────────
+        # ── Shop đặt cọc (Task 2) ──────────────────────────────────────────────
         st.subheader("🏪 Shop đặt cọc")
         all_shops = sorted(asm_data.get("all_shops", []), key=lambda x: x["deposit_count"], reverse=True)
         if all_shops:
+            def _shop_row(s):
+                row = {"Shop": s["shop_ref"], "Số cọc": s["deposit_count"], "Mức": s["level"], "ASM": s["sender"]}
+                if d1_shop_map is not None:
+                    row["Cọc D-1"] = d1_shop_map.get(s["shop_ref"], "—")
+                return row
             st.dataframe(
-                [{"Shop": s["shop_ref"], "Số cọc": s["deposit_count"],
-                  "Mức": s["level"], "ASM": s["sender"]} for s in all_shops],
+                [_shop_row(s) for s in all_shops],
                 use_container_width=True, hide_index=True,
             )
         else:

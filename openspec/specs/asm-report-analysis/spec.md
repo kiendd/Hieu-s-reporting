@@ -286,6 +286,8 @@ The web UI SHALL display `total_deposits` and `total_ra_tiem` as `st.metric` til
 
 D-1 data SHALL be fetched as a separate API call for the calendar day immediately before the target date. D-1 comparison is shown only when the analysis covers exactly one calendar day. For multi-day date ranges, the delta is omitted.
 
+The D-1 `all_shops` list SHALL also be used to populate a **Cọc D-1** column in the "Shop đặt cọc", "Shop cọc thấp", and "Nhân viên cọc tốt" tables, matched by `shop_ref`. The column is omitted for multi-day ranges.
+
 #### Scenario: Single-day run with D-1 available
 - **WHEN** the user runs analysis for a single day and D-1 messages exist
 - **THEN** the Tổng cọc metric tile shows today's total with a +/- delta vs. D-1
@@ -294,24 +296,57 @@ D-1 data SHALL be fetched as a separate API call for the calendar day immediatel
 - **WHEN** the user selects a date range of more than one day
 - **THEN** no D-1 delta is shown
 
+#### Scenario: Shop đặt cọc table with D-1 column
+- **WHEN** D-1 data is available and a shop also appeared in D-1
+- **THEN** the "Shop đặt cọc" table shows that shop's D-1 deposit count in a Cọc D-1 column
+
+#### Scenario: Shop absent from D-1
+- **WHEN** D-1 data is available but a shop has no D-1 entry
+- **THEN** the Cọc D-1 column shows `—` for that shop
+
 ---
 
 ### Requirement: No-Deposit and High-Deposit Shop Lists
-The web UI SHALL display two dedicated sections after the summary metrics:
+The web UI SHALL display dedicated sections after the summary metrics:
 
-**Nhân viên không phát sinh cọc** — two sub-tables:
-- Sub-table A: shops with `deposit_count == 0`, columns: ASM, Shop
-- Sub-table B: group members with no report on the target date (deadline `"23:59"`), column: Tên thành viên
+**Shop báo cáo 0 cọc** — shops with `deposit_count == 0`, columns: ASM, Shop
 
-**Nhân viên cọc tốt** — shops where `deposit_count > deposit_high`, columns: ASM, Shop, Số cọc
+**Shop cọc thấp** — shops with `deposit_count < deposit_low`, columns: ASM, Shop, Số cọc, Cọc D-1 (when D-1 data is available)
 
-#### Scenario: Shop with 0 deposits appears in sub-table A
+**Nhân viên cọc tốt** — shops where `deposit_count > deposit_high`, columns: ASM, Shop, Số cọc, Cọc D-1 (when D-1 data is available)
+
+#### Scenario: Shop with 0 deposits appears in 0-cọc section
 - **WHEN** an ASM report contains `0 cọc` for a shop
-- **THEN** that shop appears in sub-table A
+- **THEN** that shop appears in the "Shop báo cáo 0 cọc" section
 
-#### Scenario: Member with no report appears in sub-table B
-- **WHEN** a group member has sent no ASM report on the target date
-- **THEN** their name appears in sub-table B (subject to skip list)
+#### Scenario: Low-deposit table with D-1 column
+- **WHEN** D-1 data is available and a low-deposit shop also appeared in D-1
+- **THEN** the Cọc D-1 column shows that shop's previous-day deposit count
+
+#### Scenario: Cọc tốt table with D-1 column
+- **WHEN** D-1 data is available and a high-deposit shop also appeared in D-1
+- **THEN** the "Nhân viên cọc tốt" table shows that shop's D-1 deposit count
+
+#### Scenario: D-1 column omitted on multi-day range
+- **WHEN** the analysis covers more than one day
+- **THEN** no Cọc D-1 column appears in any deposit table
+
+---
+
+### Requirement: Unreported-Now Table
+The web UI SHALL display a dedicated **Chưa báo cáo đến hiện tại** section listing all group members who have not submitted any report as of the run time. The section appears below the summary metric row. When the list is empty, the section shows "Tất cả đã báo cáo". When `unreported_now` is `None` (member list unavailable), the section is hidden.
+
+#### Scenario: Some members have not reported yet
+- **WHEN** `unreported_now` contains one or more names
+- **THEN** a "Chưa báo cáo đến hiện tại" section appears with those names listed
+
+#### Scenario: All members have reported
+- **WHEN** `unreported_now` is an empty list
+- **THEN** the section shows "Tất cả đã báo cáo"
+
+#### Scenario: Member list unavailable
+- **WHEN** `unreported_now` is None
+- **THEN** the section is not shown
 
 ---
 
