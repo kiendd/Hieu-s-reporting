@@ -447,14 +447,15 @@ if run:
 
                 status.update(label=f"✓ {tab_label}", state="complete")
                 results.append({
-                    "tab_label":   tab_label,
-                    "group_id":    group_id,
-                    "asm_data":    asm_data,
-                    "asm_data_d1": asm_data_d1,
-                    "asm_msgs":    asm_msgs,
-                    "excel_buf":   excel_buf,
-                    "target_date": target_date,
-                    "error":       None,
+                    "tab_label":    tab_label,
+                    "group_id":     group_id,
+                    "asm_data":     asm_data,
+                    "asm_data_d1":  asm_data_d1,
+                    "asm_msgs":     asm_msgs,
+                    "excel_buf":    excel_buf,
+                    "target_date":  target_date,
+                    "past_deadline": _now_hhmm >= cfg["deadline"],
+                    "error":        None,
                 })
             except Exception as exc:
                 status.update(label=f"✗ {entry['label']}", state="error")
@@ -594,7 +595,7 @@ if run:
             st.caption("(không có)")
 
         missing = asm_data.get("missing_reporters")
-        if missing is not None:
+        if missing is not None and r.get("past_deadline"):
             st.subheader("⚠️ ASM chưa báo cáo (sau deadline)")
             if missing:
                 st.dataframe(
