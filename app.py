@@ -6,15 +6,37 @@ Chạy: streamlit run app.py
 import io
 import json
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import streamlit as st
+import extra_streamlit_components as stx
 
-# ── Config persistence ────────────────────────────────────────────────────────
-_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+# ── Môi trường: local (có config.json) hay cloud ─────────────────────────────
+_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+_IS_LOCAL = os.path.isfile(_CONFIG_PATH)
 
+# ── Cookie manager (browser-side, mỗi user riêng) ────────────────────────────
+@st.cache_resource
+def _get_cookie_manager():
+    return stx.CookieManager(key="fpt_asm")
+
+_cm = _get_cookie_manager()
+
+def _cookie_get(key: str) -> str:
+    try:
+        return _cm.get(key) or ""
+    except Exception:
+        return ""
+
+def _cookie_set(key: str, value: str) -> None:
+    try:
+        _cm.set(key, value, expires_at=datetime.now() + timedelta(days=90))
+    except Exception:
+        pass
+
+# ── Config file (chỉ dùng local, không lưu token) ────────────────────────────
 def _load_config() -> dict:
-    if os.path.exists(_CONFIG_PATH):
+    if _IS_LOCAL:
         try:
             with open(_CONFIG_PATH, encoding="utf-8") as f:
                 return json.load(f)
@@ -22,15 +44,18 @@ def _load_config() -> dict:
             pass
     return {}
 
-def _save_config(token: str, group: str) -> None:
+def _save_group_local(group: str) -> None:
+    """Lưu group vào config.json khi chạy local. Token không bao giờ ghi file."""
+    if not _IS_LOCAL:
+        return
     cfg = _load_config()
-    cfg["token"] = token
+    cfg.pop("token", None)   # xoá token cũ nếu còn sót
     cfg["group"] = group
     try:
         with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        st.warning(f"Không lưu được config: {e}")
+    except Exception:
+        pass
 
 # ── Import core logic từ fpt_chat_stats ──────────────────────────────────────
 try:
@@ -63,12 +88,17 @@ st.caption("Phân tích báo cáo hàng ngày của ASM từ FPT Chat")
 st.divider()
 
 # ── Vùng 1: Kết nối ──────────────────────────────────────────────────────────
+# Token: ưu tiên cookie (browser) — không bao giờ đọc từ file
+# Group: cookie → config.json (local fallback)
 _cfg = _load_config()
+_saved_token = _cookie_get("token")
+_saved_group = _cookie_get("group") or _cfg.get("group", "")
+
 col_token, col_group = st.columns(2)
 with col_token:
     token = st.text_input(
         "Token (Bearer)",
-        value=_cfg.get("token", ""),
+        value=_saved_token,
         type="password",
         placeholder="Dán token từ DevTools vào đây",
         help="DevTools → Network → chọn request api-chat.fpt.com → Headers → Authorization: Bearer <token>",
@@ -76,7 +106,7 @@ with col_token:
 with col_group:
     group = st.text_input(
         "Group ID hoặc URL nhóm chat",
-        value=_cfg.get("group", ""),
+        value=_saved_group,
         placeholder="686b517a54ca42cb3c30e1df hoặc URL đầy đủ",
     )
 
@@ -122,7 +152,11 @@ if run:
         st.error("Vui lòng nhập Group ID hoặc URL.")
         st.stop()
 
-    _save_config(token, group)
+    # Lưu vào cookie (browser, mỗi user riêng, 90 ngày)
+    _cookie_set("token", token)
+    _cookie_set("group", group)
+    # Lưu group vào config.json khi chạy local (không lưu token)
+    _save_group_local(group)
 
     # Tính date range
     VN_OFFSET = 7 * 3600
