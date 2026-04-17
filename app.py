@@ -328,6 +328,203 @@ run = st.button(
     use_container_width=True,
 )
 
+def _render_result(r: dict) -> None:
+    if r.get("error"):
+        st.error(f"Lỗi: {r['error']}")
+        return
+
+    asm_data    = r["asm_data"]
+    asm_msgs    = r["asm_msgs"]
+    excel_buf   = r["excel_buf"]
+    target_date = r["target_date"]
+    group_id    = r["group_id"]
+    short_id    = group_id[-8:] if len(group_id) >= 8 else group_id
+
+    col_hdr, col_dl = st.columns([4, 1])
+    with col_hdr:
+        st.subheader("Kết quả phân tích")
+    with col_dl:
+        st.download_button(
+            label="⬇️ Tải Excel",
+            data=excel_buf,
+            file_name=f"asm_report_{short_id}_{target_date}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+    asm_data_d1    = r.get("asm_data_d1")
+    late_reporters = asm_data.get("late_reporters", [])
+    unreported_now = asm_data.get("unreported_now")
+
+    _d1_deps  = asm_data_d1["total_deposits"] if asm_data_d1 else None
+    _d1_tiem  = asm_data_d1["total_ra_tiem"]  if asm_data_d1 else None
+    d1_shop_map = (
+        {s["shop_ref"]: s["deposit_count"] for s in asm_data_d1["all_shops"]}
+        if asm_data_d1 else None
+    )
+
+    col_a, col_b, col_c, col_d, col_e, col_f = st.columns(6)
+    col_a.metric("Báo cáo ASM",   len(asm_msgs))
+    col_b.metric("Tổng cọc",      asm_data["total_deposits"],
+                 delta=None if _d1_deps is None else asm_data["total_deposits"] - _d1_deps)
+    col_c.metric("Tổng ra tiêm",  asm_data["total_ra_tiem"],
+                 delta=None if _d1_tiem is None else asm_data["total_ra_tiem"] - _d1_tiem)
+    col_d.metric("Shop cọc thấp", len(asm_data["low_deposit_shops"]))
+    col_e.metric("Báo cáo muộn",  len(late_reporters))
+    col_f.metric("Chưa báo cáo",  len(unreported_now) if unreported_now is not None else "—")
+
+    if not asm_msgs:
+        st.warning("Không tìm thấy báo cáo ASM nào trong khoảng thời gian này.")
+
+    if unreported_now is not None:
+        st.subheader("⏳ Chưa báo cáo đến hiện tại")
+        if unreported_now:
+            st.dataframe(
+                [{"Tên thành viên": name} for name in unreported_now],
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.success("Tất cả đã báo cáo")
+
+    no_dep = asm_data.get("no_deposit_shops", [])
+    if no_dep:
+        st.subheader("🚫 Shop báo cáo 0 cọc")
+        st.dataframe(
+            [{"ASM": s["sender"], "Shop": s["shop_ref"]} for s in no_dep],
+            use_container_width=True, hide_index=True,
+        )
+
+    low_shops = asm_data.get("low_deposit_shops", [])
+    if low_shops:
+        st.subheader("📉 Shop cọc thấp")
+        def _low_row(s):
+            d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
+            row = {"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
+            if d1 is not None:
+                row["Cọc D-1"] = d1
+            return row
+        st.dataframe(
+            [_low_row(s) for s in sorted(low_shops, key=lambda x: x["deposit_count"])],
+            use_container_width=True, hide_index=True,
+        )
+
+    high_shops = asm_data.get("high_deposit_shops", [])
+    if high_shops:
+        st.subheader("🏆 Nhân viên phát sinh cọc tốt")
+        def _high_row(s):
+            d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
+            row = {"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
+            if d1 is not None:
+                row["Cọc D-1"] = d1
+            return row
+        st.dataframe(
+            [_high_row(s) for s in sorted(high_shops, key=lambda x: x["deposit_count"], reverse=True)],
+            use_container_width=True, hide_index=True,
+        )
+
+    if late_reporters:
+        st.subheader("🕐 ASM báo cáo muộn")
+        st.dataframe(
+            [{"ASM": lr["sender"], "Giờ gửi": lr["sent_at_vn"]} for lr in late_reporters],
+            use_container_width=True, hide_index=True,
+        )
+
+    st.subheader("🏪 Shop đặt cọc")
+    all_shops = sorted(asm_data.get("all_shops", []), key=lambda x: x["deposit_count"], reverse=True)
+    if all_shops:
+        def _shop_row(s):
+            d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
+            row = {"Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
+            if d1 is not None:
+                row["Cọc D-1"] = d1
+            row["Mức"] = s["level"]
+            row["ASM"] = s["sender"]
+            return row
+        st.dataframe(
+            [_shop_row(s) for s in all_shops],
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        st.caption("(không có)")
+
+    st.subheader("💡 Ý tưởng triển khai từ ASM")
+    ideas = asm_data.get("ideas", [])
+    if ideas:
+        st.table(
+            [{"ASM": i["sender"], "Shop": i["shop_ref"], "Nội dung": i["da_lam"]}
+             for i in ideas]
+        )
+    else:
+        st.caption("(không có)")
+
+    st.subheader("⭐ Điểm nổi bật")
+    tich_cuc = asm_data["highlights"]["tich_cuc"]
+    han_che  = asm_data["highlights"]["han_che"]
+    highlights = (
+        [{"ASM": h["sender"], "Shop": h["shop_ref"], "Loại": "Tích cực", "Nội dung": h["content"]}
+         for h in tich_cuc]
+        + [{"ASM": h["sender"], "Shop": h["shop_ref"], "Loại": "Hạn chế", "Nội dung": h["content"]}
+           for h in han_che]
+    )
+    if highlights:
+        st.table(highlights)
+    else:
+        st.caption("(không có)")
+
+    missing = asm_data.get("missing_reporters")
+    if missing is not None and r.get("past_deadline"):
+        st.subheader("⚠️ ASM chưa báo cáo (sau deadline)")
+        if missing:
+            st.dataframe(
+                [{"Tên ASM": name} for name in missing],
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.success("Tất cả ASM đã báo cáo đúng hạn")
+
+    # ── Chi tiết theo shop / nhân viên ─────────────────────────────────────
+    parsed_reports = r.get("parsed_reports", [])
+    if parsed_reports:
+        st.subheader("🔍 Xem chi tiết")
+        det_col1, det_col2 = st.columns(2)
+
+        def _detail_card(report, d1_val):
+            st.markdown(f"**Số cọc:** {report['deposit_count']}  |  **Cọc D-1:** {d1_val}  |  **Ra tiêm:** {report.get('ra_tiem_count', '—')}")
+            st.markdown(f"**Giờ gửi:** {to_vn_str(report['sent_at'])}")
+            if report.get("tich_cuc"):
+                st.markdown("**Tích cực:**")
+                st.text(report["tich_cuc"])
+            if report.get("van_de"):
+                st.markdown("**Vấn đề:**")
+                st.text(report["van_de"])
+            if report.get("da_lam"):
+                st.markdown("**Đã làm:**")
+                st.text(report["da_lam"])
+
+        with det_col1:
+            shop_list = [p["shop_ref"] for p in parsed_reports if p.get("shop_ref")]
+            sel_shop = st.selectbox("Theo shop", [None] + shop_list,
+                                    format_func=lambda x: "— chọn shop —" if x is None else x,
+                                    key=f"sel_shop_{r['group_id']}")
+            if sel_shop:
+                report = next((p for p in parsed_reports if p.get("shop_ref") == sel_shop), None)
+                if report:
+                    st.markdown(f"**ASM:** {report['sender']}")
+                    _detail_card(report, d1_shop_map.get(sel_shop, "—") if d1_shop_map else "—")
+
+        with det_col2:
+            asm_list = sorted({p["sender"] for p in parsed_reports if p.get("sender")})
+            sel_asm = st.selectbox("Theo nhân viên", [None] + asm_list,
+                                   format_func=lambda x: "— chọn nhân viên —" if x is None else x,
+                                   key=f"sel_asm_{r['group_id']}")
+            if sel_asm:
+                for report in [p for p in parsed_reports if p.get("sender") == sel_asm]:
+                    shop = report.get("shop_ref", "?")
+                    st.markdown(f"**Shop:** {shop}")
+                    _detail_card(report, d1_shop_map.get(shop, "—") if d1_shop_map else "—")
+                    st.divider()
+
+
 if run:
     if not token:
         st.error("Vui lòng nhập Token.")
@@ -471,220 +668,18 @@ if run:
     if _label_updated:
         _lib_save(st.session_state.library)
 
-    # ── Render kết quả ────────────────────────────────────────────────────────
+    st.session_state["_results"] = results
 
-    def _render_result(r: dict) -> None:
-        if r.get("error"):
-            st.error(f"Lỗi: {r['error']}")
-            return
 
-        asm_data    = r["asm_data"]
-        asm_msgs    = r["asm_msgs"]
-        excel_buf   = r["excel_buf"]
-        target_date = r["target_date"]
-        group_id    = r["group_id"]
-        short_id    = group_id[-8:] if len(group_id) >= 8 else group_id
 
-        col_hdr, col_dl = st.columns([4, 1])
-        with col_hdr:
-            st.subheader("Kết quả phân tích")
-        with col_dl:
-            st.download_button(
-                label="⬇️ Tải Excel",
-                data=excel_buf,
-                file_name=f"asm_report_{short_id}_{target_date}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
-
-        asm_data_d1   = r.get("asm_data_d1")
-        late_reporters = asm_data.get("late_reporters", [])
-        unreported_now = asm_data.get("unreported_now")
-
-        # ── Tổng quan ──────────────────────────────────────────────────────────
-        _d1_deps  = asm_data_d1["total_deposits"]  if asm_data_d1 else None
-        _d1_tiem  = asm_data_d1["total_ra_tiem"]   if asm_data_d1 else None
-
-        # Task 1: D-1 shop lookup map (shop_ref -> deposit_count)
-        d1_shop_map = (
-            {s["shop_ref"]: s["deposit_count"] for s in asm_data_d1["all_shops"]}
-            if asm_data_d1 else None
-        )
-
-        col_a, col_b, col_c, col_d, col_e, col_f = st.columns(6)
-        col_a.metric("Báo cáo ASM",   len(asm_msgs))
-        col_b.metric("Tổng cọc",      asm_data["total_deposits"],
-                     delta=None if _d1_deps is None else asm_data["total_deposits"] - _d1_deps)
-        col_c.metric("Tổng ra tiêm",  asm_data["total_ra_tiem"],
-                     delta=None if _d1_tiem is None else asm_data["total_ra_tiem"] - _d1_tiem)
-        col_d.metric("Shop cọc thấp", len(asm_data["low_deposit_shops"]))
-        col_e.metric("Báo cáo muộn",  len(late_reporters))
-        col_f.metric("Chưa báo cáo",  len(unreported_now) if unreported_now is not None else "—")
-
-        if not asm_msgs:
-            st.warning("Không tìm thấy báo cáo ASM nào trong khoảng thời gian này.")
-
-        # ── Chưa báo cáo đến hiện tại (Task 5) ────────────────────────────────
-        if unreported_now is not None:
-            st.subheader("⏳ Chưa báo cáo đến hiện tại")
-            if unreported_now:
-                st.dataframe(
-                    [{"Tên thành viên": name} for name in unreported_now],
-                    use_container_width=True, hide_index=True,
-                )
-            else:
-                st.success("Tất cả đã báo cáo")
-
-        # ── Nhân viên không phát sinh cọc ──────────────────────────────────────
-        no_dep = asm_data.get("no_deposit_shops", [])
-        if no_dep:
-            st.subheader("🚫 Shop báo cáo 0 cọc")
-            st.dataframe(
-                [{"ASM": s["sender"], "Shop": s["shop_ref"]} for s in no_dep],
-                use_container_width=True, hide_index=True,
-            )
-
-        # ── Shop cọc thấp (Task 3) ─────────────────────────────────────────────
-        low_shops = asm_data.get("low_deposit_shops", [])
-        if low_shops:
-            st.subheader("📉 Shop cọc thấp")
-            def _low_row(s):
-                d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
-                row = {"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
-                if d1 is not None:
-                    row["Cọc D-1"] = d1
-                return row
-            st.dataframe(
-                [_low_row(s) for s in sorted(low_shops, key=lambda x: x["deposit_count"])],
-                use_container_width=True, hide_index=True,
-            )
-
-        # ── Nhân viên cọc tốt (Task 4) ─────────────────────────────────────────
-        high_shops = asm_data.get("high_deposit_shops", [])
-        if high_shops:
-            st.subheader("🏆 Nhân viên phát sinh cọc tốt")
-            def _high_row(s):
-                d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
-                row = {"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
-                if d1 is not None:
-                    row["Cọc D-1"] = d1
-                return row
-            st.dataframe(
-                [_high_row(s) for s in sorted(high_shops, key=lambda x: x["deposit_count"], reverse=True)],
-                use_container_width=True, hide_index=True,
-            )
-
-        # ── ASM báo cáo muộn ───────────────────────────────────────────────────
-        if late_reporters:
-            st.subheader("🕐 ASM báo cáo muộn")
-            st.dataframe(
-                [{"ASM": lr["sender"], "Giờ gửi": lr["sent_at_vn"]} for lr in late_reporters],
-                use_container_width=True, hide_index=True,
-            )
-
-        # ── Shop đặt cọc (Task 2) ──────────────────────────────────────────────
-        st.subheader("🏪 Shop đặt cọc")
-        all_shops = sorted(asm_data.get("all_shops", []), key=lambda x: x["deposit_count"], reverse=True)
-        if all_shops:
-            def _shop_row(s):
-                d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
-                row = {"Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
-                if d1 is not None:
-                    row["Cọc D-1"] = d1
-                row["Mức"] = s["level"]
-                row["ASM"] = s["sender"]
-                return row
-            st.dataframe(
-                [_shop_row(s) for s in all_shops],
-                use_container_width=True, hide_index=True,
-            )
-        else:
-            st.caption("(không có)")
-
-        st.subheader("💡 Ý tưởng triển khai từ ASM")
-        ideas = asm_data.get("ideas", [])
-        if ideas:
-            st.table(
-                [{"ASM": i["sender"], "Shop": i["shop_ref"], "Nội dung": i["da_lam"]}
-                 for i in ideas]
-            )
-        else:
-            st.caption("(không có)")
-
-        st.subheader("⭐ Điểm nổi bật")
-        tich_cuc = asm_data["highlights"]["tich_cuc"]
-        han_che  = asm_data["highlights"]["han_che"]
-        highlights = (
-            [{"ASM": h["sender"], "Shop": h["shop_ref"], "Loại": "Tích cực", "Nội dung": h["content"]}
-             for h in tich_cuc]
-            + [{"ASM": h["sender"], "Shop": h["shop_ref"], "Loại": "Hạn chế", "Nội dung": h["content"]}
-               for h in han_che]
-        )
-        if highlights:
-            st.table(highlights)
-        else:
-            st.caption("(không có)")
-
-        missing = asm_data.get("missing_reporters")
-        if missing is not None and r.get("past_deadline"):
-            st.subheader("⚠️ ASM chưa báo cáo (sau deadline)")
-            if missing:
-                st.dataframe(
-                    [{"Tên ASM": name} for name in missing],
-                    use_container_width=True, hide_index=True,
-                )
-            else:
-                st.success("Tất cả ASM đã báo cáo đúng hạn")
-
-        # ── Chi tiết theo shop / nhân viên ─────────────────────────────────────
-        parsed_reports = r.get("parsed_reports", [])
-        if parsed_reports:
-            st.subheader("🔍 Xem chi tiết")
-            det_col1, det_col2 = st.columns(2)
-
-            def _detail_card(report, d1_val):
-                st.markdown(f"**Số cọc:** {report['deposit_count']}  |  **Cọc D-1:** {d1_val}  |  **Ra tiêm:** {report.get('ra_tiem_count', '—')}")
-                st.markdown(f"**Giờ gửi:** {to_vn_str(report['sent_at'])}")
-                if report.get("tich_cuc"):
-                    st.markdown("**Tích cực:**")
-                    st.text(report["tich_cuc"])
-                if report.get("van_de"):
-                    st.markdown("**Vấn đề:**")
-                    st.text(report["van_de"])
-                if report.get("da_lam"):
-                    st.markdown("**Đã làm:**")
-                    st.text(report["da_lam"])
-
-            # --- Theo shop ---
-            with det_col1:
-                shop_list = [p["shop_ref"] for p in parsed_reports if p.get("shop_ref")]
-                sel_shop = st.selectbox("Theo shop", [None] + shop_list,
-                                        format_func=lambda x: "— chọn shop —" if x is None else x,
-                                        key=f"sel_shop_{r['group_id']}")
-                if sel_shop:
-                    report = next((p for p in parsed_reports if p.get("shop_ref") == sel_shop), None)
-                    if report:
-                        st.markdown(f"**ASM:** {report['sender']}")
-                        _detail_card(report, d1_shop_map.get(sel_shop, "—") if d1_shop_map else "—")
-
-            # --- Theo nhân viên ---
-            with det_col2:
-                asm_list = sorted({p["sender"] for p in parsed_reports if p.get("sender")})
-                sel_asm = st.selectbox("Theo nhân viên", [None] + asm_list,
-                                       format_func=lambda x: "— chọn nhân viên —" if x is None else x,
-                                       key=f"sel_asm_{r['group_id']}")
-                if sel_asm:
-                    for report in [p for p in parsed_reports if p.get("sender") == sel_asm]:
-                        shop = report.get("shop_ref", "?")
-                        st.markdown(f"**Shop:** {shop}")
-                        _detail_card(report, d1_shop_map.get(shop, "—") if d1_shop_map else "—")
-                        st.divider()
-
+# ── Render kết quả (ngoài if run để giữ kết quả qua các rerun) ────────────────
+_cached_results = st.session_state.get("_results", [])
+if _cached_results:
     st.divider()
-    if len(results) == 1:
-        _render_result(results[0])
+    if len(_cached_results) == 1:
+        _render_result(_cached_results[0])
     else:
-        tabs = st.tabs([r["tab_label"] for r in results])
-        for tab, result in zip(tabs, results):
+        tabs = st.tabs([r["tab_label"] for r in _cached_results])
+        for tab, result in zip(tabs, _cached_results):
             with tab:
                 _render_result(result)
