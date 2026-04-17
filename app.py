@@ -8,6 +8,7 @@ import json
 import os
 from datetime import date, datetime, timezone
 
+import pandas as pd
 import streamlit as st
 from streamlit_javascript import st_javascript
 
@@ -376,6 +377,15 @@ def _render_result(r: dict) -> None:
     if not asm_msgs:
         st.warning("Không tìm thấy báo cáo ASM nào trong khoảng thời gian này.")
 
+    # ── Chart: cọc theo shop ───────────────────────────────────────────────
+    all_shops_raw = sorted(asm_data.get("all_shops", []), key=lambda x: x["deposit_count"], reverse=True)
+    if all_shops_raw:
+        labels = [s["shop_ref"][:28] for s in all_shops_raw]
+        chart_dict = {"Hôm nay": [s["deposit_count"] for s in all_shops_raw]}
+        if d1_shop_map is not None:
+            chart_dict["D-1"] = [d1_shop_map.get(s["shop_ref"], 0) for s in all_shops_raw]
+        st.bar_chart(pd.DataFrame(chart_dict, index=labels), use_container_width=True)
+
     if unreported_now is not None:
         st.subheader("⏳ Chưa báo cáo đến hiện tại")
         if unreported_now:
@@ -676,6 +686,19 @@ if run:
 _cached_results = st.session_state.get("_results", [])
 if _cached_results:
     st.divider()
+
+    # ── Chart so sánh giữa các nhóm (chỉ hiện khi có ≥ 2 nhóm) ──────────────
+    _ok_results = [r for r in _cached_results if not r.get("error")]
+    if len(_ok_results) >= 2:
+        st.subheader("📊 So sánh giữa các nhóm")
+        _cmp_data = {
+            "Tổng cọc":    [r["asm_data"]["total_deposits"]  for r in _ok_results],
+            "Tổng ra tiêm": [r["asm_data"]["total_ra_tiem"]  for r in _ok_results],
+        }
+        _cmp_labels = [r["tab_label"] for r in _ok_results]
+        st.bar_chart(pd.DataFrame(_cmp_data, index=_cmp_labels), use_container_width=True)
+        st.divider()
+
     if len(_cached_results) == 1:
         _render_result(_cached_results[0])
     else:
