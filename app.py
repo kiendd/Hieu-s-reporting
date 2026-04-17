@@ -83,6 +83,7 @@ try:
         analyze_asm_reports,
         build_session,
         check_asm_compliance,
+        check_late_reporters,
         detect_asm_reports,
         extract_group_id,
         fetch_all_messages,
@@ -337,11 +338,11 @@ if run:
     _ls_set("fpt_token", token)
 
     # Tính date range
+    import time as _time
     VN_OFFSET = 7 * 3600
+    _vn_now = datetime.fromtimestamp(_time.time() + VN_OFFSET, tz=timezone.utc)
     if use_today:
-        _today_str = datetime.fromtimestamp(
-            __import__("time").time() + VN_OFFSET, tz=timezone.utc
-        ).strftime("%Y-%m-%d")
+        _today_str = _vn_now.strftime("%Y-%m-%d")
         date_from_str = date_to_str = target_date = _today_str
     else:
         date_from_str = date_from_input.strftime("%Y-%m-%d")
@@ -351,9 +352,23 @@ if run:
     date_from = parse_date_arg(date_from_str, end_of_day=False)
     date_to   = parse_date_arg(date_to_str,   end_of_day=True)
 
+    # D-1 chỉ khi single-day
+    _is_single_day = date_from_str == date_to_str
+    if _is_single_day:
+        from datetime import timedelta
+        _d1_str   = (datetime.strptime(date_from_str, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+        _d1_from  = parse_date_arg(_d1_str, end_of_day=False)
+        _d1_to    = parse_date_arg(_d1_str, end_of_day=True)
+    else:
+        _d1_str = _d1_from = _d1_to = None
+
+    # Thời điểm chạy báo cáo (dùng cho "chưa báo cáo đến hiện tại")
+    _now_hhmm = _vn_now.strftime("%H:%M")
+
     # ── Fetch & analyze từng nhóm ─────────────────────────────────────────────
 
     results = []
+    _label_updated = False
     for entry in selected_groups:
         group_id = extract_group_id(entry["url"])
         short_id = group_id[-8:] if len(group_id) >= 8 else group_id
@@ -392,6 +407,39 @@ if run:
                     asm_data["missing_reporters"] = check_asm_compliance(
                         parsed, members, target_date, cfg["deadline"], skip_list
                     )
+                    asm_data["unreported_now"] = check_asm_compliance(
+                        parsed, members, target_date, _now_hhmm, skip_list
+                    )
+                else:
+                    asm_data["unreported_now"] = None
+
+                asm_data["late_reporters"] = check_late_reporters(
+                    parsed, target_date, cfg["deadline"]
+                )
+
+                # D-1 analysis
+                asm_data_d1 = None
+                if _is_single_day and _d1_from:
+                    try:
+                        msgs_d1   = fetch_all_messages(token=token, group_id=group_id, date_from=_d1_from)
+                        msgs_d1   = filter_by_date(msgs_d1, _d1_from, _d1_to)
+                        asm_d1    = detect_asm_reports(msgs_d1)
+                        parsed_d1 = [parse_asm_report(m) for m in asm_d1]
+                        asm_data_d1 = analyze_asm_reports(
+                            parsed_d1,
+                            deposit_low=cfg["deposit_low"],
+                            deposit_high=cfg["deposit_high"],
+                        )
+                    except Exception:
+                        asm_data_d1 = None
+
+                # Write-back: cập nhật label về library nếu lấy từ API
+                if tab_label != entry["label"]:
+                    for _li, _le in enumerate(st.session_state.library):
+                        if extract_group_id(_le["url"]) == group_id:
+                            st.session_state.library[_li]["label"] = tab_label
+                            _label_updated = True
+                            break
 
                 excel_buf = io.BytesIO()
                 write_asm_excel(asm_data, excel_buf)
@@ -402,6 +450,7 @@ if run:
                     "tab_label":   tab_label,
                     "group_id":    group_id,
                     "asm_data":    asm_data,
+                    "asm_data_d1": asm_data_d1,
                     "asm_msgs":    asm_msgs,
                     "excel_buf":   excel_buf,
                     "target_date": target_date,
@@ -414,6 +463,9 @@ if run:
                     "group_id":  group_id,
                     "error":     str(exc),
                 })
+
+    if _label_updated:
+        _lib_save(st.session_state.library)
 
     # ── Render kết quả ────────────────────────────────────────────────────────
 
@@ -441,14 +493,71 @@ if run:
                 use_container_width=True,
             )
 
-        col_a, col_b, col_c = st.columns(3)
+        asm_data_d1   = r.get("asm_data_d1")
+        late_reporters = asm_data.get("late_reporters", [])
+        unreported_now = asm_data.get("unreported_now")
+
+        # ── Tổng quan ──────────────────────────────────────────────────────────
+        _d1_deps  = asm_data_d1["total_deposits"]  if asm_data_d1 else None
+        _d1_tiem  = asm_data_d1["total_ra_tiem"]   if asm_data_d1 else None
+
+        col_a, col_b, col_c, col_d, col_e, col_f = st.columns(6)
         col_a.metric("Báo cáo ASM",   len(asm_msgs))
-        col_b.metric("Shop cọc thấp", len(asm_data["low_deposit_shops"]))
-        col_c.metric("Shop cọc cao",  len(asm_data["high_deposit_shops"]))
+        col_b.metric("Tổng cọc",      asm_data["total_deposits"],
+                     delta=None if _d1_deps is None else asm_data["total_deposits"] - _d1_deps)
+        col_c.metric("Tổng ra tiêm",  asm_data["total_ra_tiem"],
+                     delta=None if _d1_tiem is None else asm_data["total_ra_tiem"] - _d1_tiem)
+        col_d.metric("Shop cọc thấp", len(asm_data["low_deposit_shops"]))
+        col_e.metric("Báo cáo muộn",  len(late_reporters))
+        col_f.metric("Chưa báo cáo",  len(unreported_now) if unreported_now is not None else "—")
 
         if not asm_msgs:
             st.warning("Không tìm thấy báo cáo ASM nào trong khoảng thời gian này.")
 
+        # ── Nhân viên không phát sinh cọc ──────────────────────────────────────
+        no_dep = asm_data.get("no_deposit_shops", [])
+        unrpt  = asm_data.get("unreported_now")
+        if no_dep or (unrpt is not None and unrpt):
+            st.subheader("🚫 Nhân viên không phát sinh cọc")
+            sub_a, sub_b = st.columns(2)
+            with sub_a:
+                st.markdown("**Shop báo cáo 0 cọc**")
+                if no_dep:
+                    st.dataframe(
+                        [{"ASM": s["sender"], "Shop": s["shop_ref"]} for s in no_dep],
+                        use_container_width=True, hide_index=True,
+                    )
+                else:
+                    st.caption("(không có)")
+            with sub_b:
+                st.markdown("**Thành viên chưa báo cáo đến hiện tại**")
+                if unrpt:
+                    st.dataframe(
+                        [{"Tên thành viên": name} for name in unrpt],
+                        use_container_width=True, hide_index=True,
+                    )
+                else:
+                    st.caption("(không có)")
+
+        # ── Nhân viên cọc tốt ──────────────────────────────────────────────────
+        high_shops = asm_data.get("high_deposit_shops", [])
+        if high_shops:
+            st.subheader("🏆 Nhân viên phát sinh cọc tốt")
+            st.dataframe(
+                [{"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
+                 for s in sorted(high_shops, key=lambda x: x["deposit_count"], reverse=True)],
+                use_container_width=True, hide_index=True,
+            )
+
+        # ── ASM báo cáo muộn ───────────────────────────────────────────────────
+        if late_reporters:
+            st.subheader("🕐 ASM báo cáo muộn")
+            st.dataframe(
+                [{"ASM": lr["sender"], "Giờ gửi": lr["sent_at_vn"]} for lr in late_reporters],
+                use_container_width=True, hide_index=True,
+            )
+
+        # ── Shop đặt cọc ───────────────────────────────────────────────────────
         st.subheader("🏪 Shop đặt cọc")
         all_shops = sorted(asm_data.get("all_shops", []), key=lambda x: x["deposit_count"], reverse=True)
         if all_shops:
@@ -486,14 +595,14 @@ if run:
 
         missing = asm_data.get("missing_reporters")
         if missing is not None:
-            st.subheader("⚠️ ASM chưa báo cáo")
+            st.subheader("⚠️ ASM chưa báo cáo (sau deadline)")
             if missing:
                 st.dataframe(
                     [{"Tên ASM": name} for name in missing],
                     use_container_width=True, hide_index=True,
                 )
             else:
-                st.success("Tất cả ASM đã báo cáo")
+                st.success("Tất cả ASM đã báo cáo đúng hạn")
 
     st.divider()
     if len(results) == 1:

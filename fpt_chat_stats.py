@@ -258,6 +258,9 @@ def parse_asm_report(msg: dict) -> dict:
     if coc_match:
         deposit_count = int(coc_match.group(1) or coc_match.group(2))
 
+    tiem_match = re.search(r'(\d+)\s*ra\s*tiêm', content, re.IGNORECASE)
+    ra_tiem_count = int(tiem_match.group(1)) if tiem_match else None
+
     sections = _extract_sections(content)
 
     def get_section(*labels):
@@ -273,6 +276,7 @@ def parse_asm_report(msg: dict) -> dict:
     return {
         "shop_ref": shop_ref,
         "deposit_count": deposit_count,
+        "ra_tiem_count": ra_tiem_count,
         "tich_cuc": get_section("tích cực"),
         "van_de": get_section("vấn đề"),
         "da_lam": get_section("đã làm"),
@@ -286,12 +290,15 @@ def parse_asm_report(msg: dict) -> dict:
 def analyze_asm_reports(parsed_reports: list,
                         deposit_low: int = 2, deposit_high: int = 5) -> dict:
     """Phân tích báo cáo ASM: lọc shop theo đặt cọc, thu thập ý tưởng, highlight."""
-    all_shops, low_deposit_shops, high_deposit_shops = [], [], []
+    all_shops, low_deposit_shops, high_deposit_shops, no_deposit_shops = [], [], [], []
     ideas, tich_cuc_list, han_che_list = [], [], []
+    total_deposits = 0
+    total_ra_tiem  = 0
 
     for r in parsed_reports:
         dep = r.get("deposit_count")
         if dep is not None:
+            total_deposits += dep
             if dep < deposit_low:
                 level = "Thấp"
             elif dep > deposit_high:
@@ -301,10 +308,16 @@ def analyze_asm_reports(parsed_reports: list,
             entry = {"shop_ref": r["shop_ref"], "deposit_count": dep,
                      "sender": r["sender"], "level": level}
             all_shops.append(entry)
-            if level == "Thấp":
+            if dep == 0:
+                no_deposit_shops.append({"sender": r["sender"], "shop_ref": r["shop_ref"]})
+            elif level == "Thấp":
                 low_deposit_shops.append(entry)
             elif level == "Cao":
                 high_deposit_shops.append(entry)
+
+        tiem = r.get("ra_tiem_count")
+        if tiem is not None:
+            total_ra_tiem += tiem
 
         if r.get("da_lam"):
             ideas.append({
@@ -323,11 +336,14 @@ def analyze_asm_reports(parsed_reports: list,
             })
 
     return {
-        "all_shops": all_shops,
+        "total_deposits":    total_deposits,
+        "total_ra_tiem":     total_ra_tiem,
+        "all_shops":         all_shops,
+        "no_deposit_shops":  no_deposit_shops,
         "low_deposit_shops": low_deposit_shops,
         "high_deposit_shops": high_deposit_shops,
-        "ideas": ideas,
-        "highlights": {"tich_cuc": tich_cuc_list, "han_che": han_che_list},
+        "ideas":             ideas,
+        "highlights":        {"tich_cuc": tich_cuc_list, "han_che": han_che_list},
         "missing_reporters": None,  # None = chưa kiểm tra; [] = tất cả đã báo cáo
     }
 
@@ -368,6 +384,37 @@ def check_asm_compliance(parsed_reports: list, members: list,
         if not any(name_lower in rn or rn in name_lower for rn in reported):
             missing.append(name)
     return missing
+
+
+def check_late_reporters(parsed_reports: list,
+                         target_date_str: str,
+                         deadline_hhmm: str = "20:00") -> list:
+    """Trả về list {sender, sent_at_vn} của ASM gửi báo cáo SAU deadline."""
+    VN_OFFSET = 7 * 3600
+    try:
+        deadline_h, deadline_m = map(int, deadline_hhmm.split(":"))
+        target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return []
+
+    late = []
+    seen = set()
+    for r in parsed_reports:
+        dt = parse_dt(r.get("sent_at", ""))
+        if not dt:
+            continue
+        vn_dt = datetime.fromtimestamp(dt.timestamp() + VN_OFFSET, tz=timezone.utc)
+        if vn_dt.date() != target_date:
+            continue
+        after_deadline = (vn_dt.hour > deadline_h or
+                          (vn_dt.hour == deadline_h and vn_dt.minute >= deadline_m))
+        if after_deadline and r["sender"] not in seen:
+            seen.add(r["sender"])
+            late.append({
+                "sender":     r["sender"],
+                "sent_at_vn": vn_dt.strftime("%H:%M"),
+            })
+    return late
 
 
 # ---------------------------------------------------------------------------

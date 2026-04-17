@@ -187,6 +187,40 @@ When `--today` is passed:
 
 `--today` MUST NOT be combined with `--from`, `--to`, or `--date`; if any of these are also provided, the tool SHALL exit with an error.
 
+#### Scenario: Today shortcut sets date range
+- **WHEN** `--today` is passed
+- **THEN** messages are filtered to today (VN time) and the compliance check uses today as the target date
+
+#### Scenario: Conflict with explicit date flags
+- **WHEN** `--today --from 2026-04-01` are both passed
+- **THEN** the tool prints an error to `stderr` and exits with a non-zero code
+
+---
+
+### Requirement: ASM Report Parsing — ra_tiem_count
+`parse_asm_report` SHALL extract a `ra_tiem_count` field from each message using the regex pattern `(\d+)\s*ra\s*tiêm`. The field is an integer when the pattern matches with a leading number; `None` when the pattern is absent or has no numeric value.
+
+#### Scenario: ra_tiem_count present
+- **WHEN** message contains `1 KH ra tiêm`
+- **THEN** `parse_asm_report` returns `{"ra_tiem_count": 1, ...}`
+
+#### Scenario: ra_tiem_count absent or non-numeric
+- **WHEN** message contains `KH ra tiêm chưa chất lượng` (no number) or no ra tiêm mention
+- **THEN** `parse_asm_report` returns `{"ra_tiem_count": None, ...}`
+
+---
+
+### Requirement: Late Reporter Detection
+`fpt_chat_stats` SHALL expose a `check_late_reporters(parsed_reports, target_date_str, deadline_hhmm) -> list[dict]` function that returns entries `{sender, sent_at_vn}` for each parsed report whose VN-time timestamp on the target date falls **after** the deadline. Reports on other dates are ignored.
+
+#### Scenario: Report sent after deadline
+- **WHEN** a report's VN-time is 21:05 and deadline is "20:00"
+- **THEN** that sender appears in the returned list with their sent_at_vn time
+
+#### Scenario: Report sent before deadline
+- **WHEN** a report's VN-time is 19:45 and deadline is "20:00"
+- **THEN** that sender does NOT appear in the returned list
+
 #### Scenario: Today shortcut without ASM report
 - **WHEN** `--today` is passed without `--asm-report`
 - **THEN** only messages from today (VN time) are analyzed; `--from`/`--to` are auto-set and the date range label shows today's date
