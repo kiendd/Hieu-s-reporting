@@ -24,11 +24,18 @@ Thấy hiện `Python 3.x.x` là thành công.
 
 ### Bước 2 — Tải công cụ
 
-Tải toàn bộ thư mục công cụ về máy (hoặc nhận từ người gửi), giải nén ra một thư mục cố định, ví dụ `C:\Tools\ASM-Report\`.
+Tải toàn bộ thư mục công cụ về máy (hoặc nhận từ người gửi), giải nén ra một thư mục **không có dấu cách trong tên đường dẫn**.
+
+| Hệ điều hành | Ví dụ đường dẫn hợp lệ |
+|---|---|
+| Windows | `C:\Tools\ASM-Report\` |
+| Mac | `~/Desktop/ASM-Report/` hoặc `~/Documents/ASM-Report/` |
+
+> **Lưu ý Mac**: Nếu thư mục đặt ở path có dấu cách (ví dụ `Hieu reporting`), file `chay_bao_cao.command` sẽ không chạy được khi double-click do giới hạn của Terminal.app macOS.
 
 ---
 
-### Bước 3 — Cài thư viện và tạo launcher (chỉ làm 1 lần)
+### Bước 3 — Cài thư viện (chỉ làm 1 lần)
 
 **Windows** — Mở **Command Prompt**, chạy:
 
@@ -37,14 +44,19 @@ cd C:\Tools\ASM-Report
 pip install -r requirements.txt
 ```
 
-**Mac** — Mở **Terminal**, kéo thả file **`setup_mac.sh`** vào Terminal rồi nhấn Enter. Script sẽ tự cài thư viện và tạo file **`Chay Bao Cao.app`**.
+**Mac** — Mở **Terminal**, chạy:
+
+```
+cd ~/Desktop/ASM-Report
+pip3 install -r requirements.txt
+```
 
 ---
 
 ### Bước 4 — Chạy công cụ
 
 - **Windows**: Double-click vào file **`chay_bao_cao.bat`**
-- **Mac**: Double-click vào file **`Chay Bao Cao.app`**
+- **Mac**: Double-click vào file **`chay_bao_cao.command`**
 
 Trình duyệt sẽ tự mở trang web của công cụ. Điền token và Group ID rồi nhấn **Chạy phân tích**.
 
