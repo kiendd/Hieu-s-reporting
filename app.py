@@ -164,8 +164,6 @@ _saved_token = _ls_get("fpt_token")
 # ── Page header ───────────────────────────────────────────────────────────────
 
 st.title("📊 FPT Chat ASM Report")
-st.caption("Phân tích báo cáo hàng ngày của ASM từ FPT Chat")
-st.divider()
 
 token = st.text_input(
     "Token (Bearer)",
