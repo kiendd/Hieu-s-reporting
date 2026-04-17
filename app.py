@@ -115,7 +115,7 @@ div[data-testid="stElementContainer"]:has(iframe[data-testid="stCustomComponentV
 
 # ── Session state init ────────────────────────────────────────────────────────
 
-for _k, _v in [("library", []), ("ls_loaded", False), ("dialog_idx", None)]:
+for _k, _v in [("library", []), ("ls_loaded", False), ("dialog_idx", None), ("needs_save", False)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
@@ -164,7 +164,14 @@ _saved_token = _ls_get("fpt_token")
 
 # ── Page header ───────────────────────────────────────────────────────────────
 
-st.title("📊 FPT Chat ASM Report")
+_title_col, _help_col = st.columns([6, 1])
+_title_col.title("📊 FPT Chat ASM Report")
+_help_col.markdown(
+    "<div style='padding-top:1.5rem'>"
+    "<a href='https://github.com/kiendd/Hieu-s-reporting/blob/main/docs/huong-dan-su-dung.md'"
+    " target='_blank'>📖 Hướng dẫn</a></div>",
+    unsafe_allow_html=True,
+)
 
 token = st.text_input(
     "Token (Bearer)",
@@ -228,7 +235,7 @@ def _group_dialog(idx: int) -> None:
                 st.session_state.library[idx] = entry
             else:
                 st.session_state.library.append(entry)
-            _lib_save(st.session_state.library)
+            st.session_state.needs_save = True
             st.rerun()
 
     if c_cancel.button("✕ Huỷ", use_container_width=True):
@@ -285,6 +292,11 @@ else:
                 st.session_state.library.pop(i)
                 _lib_save(st.session_state.library)
                 st.rerun()
+
+# Flush deferred localStorage write (must happen in main body, not inside @st.dialog)
+if st.session_state.needs_save:
+    _lib_save(st.session_state.library)
+    st.session_state.needs_save = False
 
 # ── Date range ────────────────────────────────────────────────────────────────
 
