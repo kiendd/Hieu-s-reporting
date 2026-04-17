@@ -12,28 +12,38 @@ The web UI SHALL use `layout="wide"` in `st.set_page_config` to maximise horizon
 
 ---
 
-### Requirement: Group Library Table UI
-The web UI SHALL render the Group Library as an editable table using `st.data_editor` with `num_rows="dynamic"`. The table SHALL have the following columns: Chọn (bool), Tên nhóm (str), Group ID/URL (str), Cọc thấp (int), Cọc cao (int), Deadline (str), Bỏ qua (str).
+### Requirement: Group Library Dialog UI
+The web UI SHALL render the Group Library as a read-only display list. Each row shows a checkbox (`selected`), the group label and short ID, a config summary, an ✏ edit button, and a 🗑 delete button. A `+ Thêm nhóm` button appears above the list.
 
-Users add groups by filling in the empty row at the bottom of the table; users delete groups by selecting the row checkbox and pressing the delete key or the trash icon. There is no separate add/edit form or dedicated ✏/🗑 buttons.
+The `selected` checkbox SHALL remain editable inline (no dialog needed for toggling). All other fields SHALL only be editable through a modal dialog.
 
-After each render the app SHALL compare the returned DataFrame with the current session state. If there are differences it SHALL update `st.session_state.library` and write the updated library to `localStorage["fpt_groups_library"]`.
+Clicking `+ Thêm nhóm` or an ✏ button SHALL open a `@st.dialog` modal containing fields: Group ID/URL, display label, Cọc thấp, Cọc cao, Deadline, Bỏ qua. The dialog has "Lưu" and "Huỷ" buttons; submitting saves the entry and closes the dialog.
 
-#### Scenario: Library rendered as table
+After any change (checkbox toggle, save from dialog, delete) the app SHALL update `st.session_state.library` and write to `localStorage["fpt_groups_library"]`.
+
+#### Scenario: List rendered on load
 - **WHEN** the library contains two entries
-- **THEN** two rows appear in the `st.data_editor` table with all columns populated
+- **THEN** two rows appear, each showing label, short ID, config summary, ✏ and 🗑 buttons
 
-#### Scenario: Add group via table
-- **WHEN** the user fills in the empty bottom row and clicks away
-- **THEN** a new library entry appears and is persisted to localStorage
+#### Scenario: Add group via dialog
+- **WHEN** the user clicks `+ Thêm nhóm`, fills the form, and clicks "Lưu"
+- **THEN** the dialog closes, a new entry appears in the list, and the library is persisted to localStorage
 
-#### Scenario: Delete group via table
-- **WHEN** the user selects a row and deletes it via the table UI
-- **THEN** the entry is removed from the library and localStorage is updated
+#### Scenario: Edit group via dialog
+- **WHEN** the user clicks ✏ on a row, changes the deadline, and clicks "Lưu"
+- **THEN** the dialog closes and that entry's deadline is updated in the list and localStorage
 
-#### Scenario: Edit group via table
-- **WHEN** the user double-clicks a cell, changes the value, and confirms
-- **THEN** the library entry is updated and localStorage is updated
+#### Scenario: Cancel closes dialog without saving
+- **WHEN** the user clicks ✏, changes a value, then clicks "Huỷ" or the X button
+- **THEN** the dialog closes and the entry is unchanged
+
+#### Scenario: Delete group
+- **WHEN** the user clicks 🗑 on a row
+- **THEN** the entry is removed immediately (no dialog) and localStorage is updated
+
+#### Scenario: Toggle selection inline
+- **WHEN** the user checks or unchecks the checkbox on a row
+- **THEN** the `selected` flag updates immediately without opening a dialog
 
 ### Requirement: Per-Group Advanced Config Storage
 The web UI SHALL store advanced options (`deposit_low`, `deposit_high`, `deadline`, `skip`) for each group as part of the Group Library entry under `fpt_groups_library` in localStorage. Config is no longer stored separately in `fpt_group_configs`.
