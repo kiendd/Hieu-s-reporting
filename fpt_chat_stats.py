@@ -134,6 +134,17 @@ def fetch_page(session: requests.Session, base_url: str, group_id: str,
     return resp.json()
 
 
+def fetch_group_info(session: requests.Session, base_url: str, group_id: str) -> dict:
+    """Lấy thông tin nhóm (name, ...). Trả {} nếu lỗi hoặc endpoint không tồn tại."""
+    try:
+        resp = session.get(f"{base_url}/group-management/group/{group_id}", timeout=10)
+        if resp.ok:
+            return resp.json()
+    except Exception:
+        pass
+    return {}
+
+
 def fetch_group_members(session: requests.Session, base_url: str,
                         group_id: str, limit: int = 50) -> list:
     """Lấy toàn bộ thành viên group qua phân trang page-based."""

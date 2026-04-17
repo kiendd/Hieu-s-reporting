@@ -11,5 +11,5 @@
 
 ## 3. Validation
 - [x] 3.1 Syntax check pass
-- [ ] 3.2 Mở app, xác nhận form đọc được giá trị đã lưu từ localStorage
-- [ ] 3.3 Kiểm tra Network tab: token không xuất hiện trong request headers
+- [x] 3.2 Mở app, xác nhận form đọc được giá trị đã lưu từ localStorage
+- [x] 3.3 Kiểm tra Network tab: token không xuất hiện trong request headers
