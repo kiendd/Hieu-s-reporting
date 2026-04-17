@@ -4,7 +4,6 @@ Chạy: streamlit run app.py
 """
 
 import io
-import sys
 from datetime import date, datetime, timezone
 
 import streamlit as st
@@ -21,7 +20,6 @@ try:
         filter_by_date,
         parse_asm_report,
         parse_date_arg,
-        print_asm_report,
         build_session,
         write_asm_excel,
     )
@@ -38,44 +36,55 @@ st.set_page_config(
 
 st.title("📊 FPT Chat ASM Report")
 st.caption("Phân tích báo cáo hàng ngày của ASM từ FPT Chat")
+st.divider()
 
-# ── Sidebar — cấu hình ────────────────────────────────────────────────────────
-with st.sidebar:
-    st.header("⚙️ Cấu hình")
-
+# ── Vùng 1: Kết nối ──────────────────────────────────────────────────────────
+col_token, col_group = st.columns(2)
+with col_token:
     token = st.text_input(
         "Token (Bearer)",
         type="password",
         placeholder="Dán token từ DevTools vào đây",
         help="DevTools → Network → chọn request api-chat.fpt.com → Headers → Authorization: Bearer <token>",
     )
+with col_group:
     group = st.text_input(
         "Group ID hoặc URL nhóm chat",
         placeholder="686b517a54ca42cb3c30e1df hoặc URL đầy đủ",
     )
 
-    st.divider()
-    st.subheader("📅 Khoảng thời gian")
-    use_today = st.checkbox("Hôm nay", value=True)
-    if not use_today:
-        col1, col2 = st.columns(2)
-        with col1:
-            date_from_input = st.date_input("Từ ngày", value=date.today())
-        with col2:
-            date_to_input = st.date_input("Đến ngày", value=date.today())
+# ── Vùng 2: Thời gian ────────────────────────────────────────────────────────
+date_mode = st.radio(
+    "Khoảng thời gian",
+    ["Hôm nay", "Chọn khoảng ngày"],
+    horizontal=True,
+    label_visibility="collapsed",
+)
+use_today = date_mode == "Hôm nay"
 
-    st.divider()
-    st.subheader("🔧 Tuỳ chọn nâng cao")
-    deposit_low  = st.number_input("Ngưỡng đặt cọc thấp (<)", value=2, min_value=0)
-    deposit_high = st.number_input("Ngưỡng đặt cọc cao (>)",  value=5, min_value=0)
-    deadline     = st.text_input("Deadline báo cáo (giờ VN)", value="20:00")
-    skip_str     = st.text_input(
-        "Bỏ qua (không check compliance)",
+if not use_today:
+    col1, col2 = st.columns(2)
+    with col1:
+        date_from_input = st.date_input("Từ ngày", value=date.today())
+    with col2:
+        date_to_input = st.date_input("Đến ngày", value=date.today())
+
+# ── Vùng 3: Tuỳ chọn nâng cao ────────────────────────────────────────────────
+with st.expander("⚙️ Tuỳ chọn nâng cao"):
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        deposit_low  = st.number_input("Ngưỡng cọc thấp (<)", value=2, min_value=0)
+    with c2:
+        deposit_high = st.number_input("Ngưỡng cọc cao (>)",  value=5, min_value=0)
+    with c3:
+        deadline = st.text_input("Deadline (giờ VN)", value="20:00")
+    skip_str = st.text_input(
+        "Bỏ qua khỏi compliance check",
         placeholder="Tên Trưởng phòng, Tên Giám đốc",
         help="Cách nhau bằng dấu phẩy",
     )
 
-# ── Main — nút chạy ───────────────────────────────────────────────────────────
+# ── Nút chạy ─────────────────────────────────────────────────────────────────
 run = st.button("▶ Chạy phân tích", type="primary", use_container_width=True)
 
 if run:
@@ -121,11 +130,9 @@ if run:
         messages = filter_by_date(messages, date_from, date_to)
         st.write(f"Sau lọc ngày: {len(messages)} tin nhắn")
 
-        # ── ASM detection ─────────────────────────────────────────────────────
         asm_msgs = detect_asm_reports(messages)
         st.write(f"Phát hiện {len(asm_msgs)} báo cáo ASM")
 
-        # ── Compliance check ──────────────────────────────────────────────────
         try:
             session = build_session(token)
             members = fetch_group_members(session, "https://api-chat.fpt.com", group_id)
@@ -137,7 +144,7 @@ if run:
         status.update(label="Hoàn tất tải dữ liệu", state="complete")
 
     # ── Phân tích ─────────────────────────────────────────────────────────────
-    parsed  = [parse_asm_report(m) for m in asm_msgs]
+    parsed   = [parse_asm_report(m) for m in asm_msgs]
     asm_data = analyze_asm_reports(parsed, deposit_low=deposit_low, deposit_high=deposit_high)
 
     if members:
@@ -148,34 +155,29 @@ if run:
     if not asm_msgs:
         st.warning("Không tìm thấy báo cáo ASM nào trong khoảng thời gian này.")
 
-    # ── Hiển thị kết quả ──────────────────────────────────────────────────────
+    # ── Kết quả ───────────────────────────────────────────────────────────────
     st.divider()
-
     col_a, col_b, col_c = st.columns(3)
     col_a.metric("Báo cáo ASM", len(asm_msgs))
     col_b.metric("Shop cọc thấp", len(asm_data["low_deposit_shops"]))
     col_c.metric("Shop cọc cao",  len(asm_data["high_deposit_shops"]))
 
-    # Shop đặt cọc thấp
     if asm_data["low_deposit_shops"]:
         st.subheader("🔴 Shop đặt cọc thấp")
         for s in sorted(asm_data["low_deposit_shops"], key=lambda x: x["deposit_count"]):
             st.markdown(f"- **{s['shop_ref']}** — {s['deposit_count']} cọc *(ASM: {s['sender']})*")
 
-    # Shop đặt cọc cao
     if asm_data["high_deposit_shops"]:
         st.subheader("🟢 Shop đặt cọc cao")
         for s in sorted(asm_data["high_deposit_shops"], key=lambda x: x["deposit_count"], reverse=True):
             st.markdown(f"- **{s['shop_ref']}** — {s['deposit_count']} cọc *(ASM: {s['sender']})*")
 
-    # Ý tưởng
     if asm_data["ideas"]:
         st.subheader("💡 Ý tưởng triển khai từ ASM")
         for idea in asm_data["ideas"]:
             with st.expander(f"{idea['sender']} — {idea['shop_ref']}"):
                 st.markdown(idea["da_lam"])
 
-    # Điểm nổi bật
     tich_cuc = asm_data["highlights"]["tich_cuc"]
     han_che  = asm_data["highlights"]["han_che"]
     if tich_cuc or han_che:
@@ -191,7 +193,6 @@ if run:
                 with st.expander(f"{h['sender']} — {h['shop_ref']}"):
                     st.markdown(h["content"])
 
-    # ASM chưa báo cáo
     missing = asm_data.get("missing_reporters")
     if missing is not None:
         st.subheader("⚠️ ASM chưa báo cáo")
@@ -206,12 +207,10 @@ if run:
     excel_buf = io.BytesIO()
     write_asm_excel(asm_data, excel_buf)
     excel_buf.seek(0)
-
-    filename = f"asm_report_{target_date}.xlsx"
     st.download_button(
         label="⬇️ Tải báo cáo Excel",
         data=excel_buf,
-        file_name=filename,
+        file_name=f"asm_report_{target_date}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
