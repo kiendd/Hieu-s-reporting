@@ -8,6 +8,8 @@ import json
 import os
 from datetime import date, datetime, timezone
 
+import pandas as pd
+
 import streamlit as st
 from streamlit_javascript import st_javascript
 
@@ -75,6 +77,47 @@ def _migrate_legacy(groups_list: list, group_configs: dict) -> list:
         })
     return lib
 
+_DF_COLS = ["selected", "label", "url", "deposit_low", "deposit_high", "deadline", "skip"]
+
+def _lib_to_df(lib: list) -> pd.DataFrame:
+    rows = []
+    for e in lib:
+        cfg = e.get("config", {})
+        rows.append({
+            "selected":     bool(e.get("selected", True)),
+            "label":        e.get("label", ""),
+            "url":          e.get("url", ""),
+            "deposit_low":  int(cfg.get("deposit_low",  _LIB_DEFAULTS["deposit_low"])),
+            "deposit_high": int(cfg.get("deposit_high", _LIB_DEFAULTS["deposit_high"])),
+            "deadline":     cfg.get("deadline", _LIB_DEFAULTS["deadline"]),
+            "skip":         cfg.get("skip",     _LIB_DEFAULTS["skip"]),
+        })
+    return pd.DataFrame(rows, columns=_DF_COLS)
+
+def _df_to_lib(df: pd.DataFrame) -> list:
+    from fpt_chat_stats import extract_group_id as _eid
+    lib = []
+    for _, row in df.iterrows():
+        url = str(row.get("url", "")).strip()
+        if not url:
+            continue
+        label = str(row.get("label", "")).strip()
+        if not label:
+            gid = _eid(url)
+            label = gid[-8:] if len(gid) >= 8 else gid
+        lib.append({
+            "url":      url,
+            "label":    label,
+            "selected": bool(row.get("selected", True)),
+            "config": {
+                "deposit_low":  int(row.get("deposit_low",  _LIB_DEFAULTS["deposit_low"])),
+                "deposit_high": int(row.get("deposit_high", _LIB_DEFAULTS["deposit_high"])),
+                "deadline":     str(row.get("deadline", _LIB_DEFAULTS["deadline"])),
+                "skip":         str(row.get("skip",     _LIB_DEFAULTS["skip"])),
+            },
+        })
+    return lib
+
 # ── Import core logic ─────────────────────────────────────────────────────────
 
 try:
@@ -101,7 +144,7 @@ except ImportError as e:
 st.set_page_config(
     page_title="FPT Chat ASM Report",
     page_icon="📊",
-    layout="centered",
+    layout="wide",
 )
 
 st.markdown("""
@@ -114,7 +157,7 @@ div[data-testid="stElementContainer"]:has(iframe[data-testid="stCustomComponentV
 
 # ── Session state init ────────────────────────────────────────────────────────
 
-for _k, _v in [("library", []), ("editing_idx", None), ("adding", False), ("ls_loaded", False)]:
+for _k, _v in [("library", []), ("ls_loaded", False)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
@@ -175,134 +218,29 @@ token = st.text_input(
 
 # ── Group Library ─────────────────────────────────────────────────────────────
 
-hdr_col, add_col = st.columns([5, 1])
-with hdr_col:
-    st.markdown("**📋 Nhóm chat**")
-with add_col:
-    if st.button("+ Thêm nhóm", use_container_width=True):
-        st.session_state.adding = True
-        st.session_state.editing_idx = None
-        st.rerun()
+st.markdown("**📋 Nhóm chat**")
 
-lib = st.session_state.library
+_edited_df = st.data_editor(
+    _lib_to_df(st.session_state.library),
+    column_config={
+        "selected":     st.column_config.CheckboxColumn("Chọn",         width="small"),
+        "label":        st.column_config.TextColumn("Tên nhóm",         width="medium"),
+        "url":          st.column_config.TextColumn("Group ID / URL",    width="large"),
+        "deposit_low":  st.column_config.NumberColumn("Cọc thấp",       min_value=0, width="small"),
+        "deposit_high": st.column_config.NumberColumn("Cọc cao",        min_value=0, width="small"),
+        "deadline":     st.column_config.TextColumn("Deadline",          width="small"),
+        "skip":         st.column_config.TextColumn("Bỏ qua",           width="medium"),
+    },
+    num_rows="dynamic",
+    use_container_width=True,
+    hide_index=True,
+    key="library_editor",
+)
 
-if not lib:
-    st.caption("Chưa có nhóm nào. Nhấn **+ Thêm nhóm** để bắt đầu.")
-else:
-    for i, entry in enumerate(lib):
-        gid      = extract_group_id(entry["url"])
-        short_id = gid[-8:] if len(gid) >= 8 else gid
-        cfg      = entry["config"]
-        cfg_summary = (
-            f"cọc {cfg['deposit_low']}–{cfg['deposit_high']} · {cfg['deadline']}"
-            + (f" · bỏ qua: {cfg['skip']}" if cfg["skip"] else "")
-        )
-
-        c_chk, c_info, c_edit, c_del = st.columns([0.5, 5.5, 0.7, 0.7])
-        with c_chk:
-            new_sel = st.checkbox(
-                "sel",
-                value=entry["selected"],
-                key=f"sel_{i}",
-                label_visibility="collapsed",
-            )
-            if new_sel != entry["selected"]:
-                st.session_state.library[i]["selected"] = new_sel
-                _lib_save(st.session_state.library)
-        with c_info:
-            st.markdown(
-                f"**{entry['label']}** &nbsp;`{short_id}`&nbsp; "
-                f"<span style='color:gray;font-size:0.85em'>{cfg_summary}</span>",
-                unsafe_allow_html=True,
-            )
-        with c_edit:
-            if st.button("✏", key=f"edit_{i}", use_container_width=True, help="Sửa cấu hình"):
-                st.session_state.editing_idx = i
-                st.session_state.adding = False
-                st.rerun()
-        with c_del:
-            if st.button("🗑", key=f"del_{i}", use_container_width=True, help="Xóa nhóm"):
-                st.session_state.library.pop(i)
-                if st.session_state.editing_idx == i:
-                    st.session_state.editing_idx = None
-                elif isinstance(st.session_state.editing_idx, int) and st.session_state.editing_idx > i:
-                    st.session_state.editing_idx -= 1
-                _lib_save(st.session_state.library)
-                st.rerun()
-
-# ── Add / Edit form ───────────────────────────────────────────────────────────
-
-editing_idx = st.session_state.editing_idx
-show_form   = st.session_state.adding or editing_idx is not None
-
-if show_form:
-    st.divider()
-    prefill     = lib[editing_idx] if editing_idx is not None else None
-    prefill_cfg = prefill["config"] if prefill else _LIB_DEFAULTS
-    form_title  = f"✏ Sửa nhóm: **{prefill['label']}**" if prefill else "**+ Thêm nhóm mới**"
-    st.markdown(form_title)
-
-    with st.form("group_form", border=True):
-        f_url = st.text_input(
-            "Group ID hoặc URL nhóm chat *",
-            value=prefill["url"] if prefill else "",
-            placeholder="686b517a54ca42cb3c30e1df hoặc URL đầy đủ",
-        )
-        f_label = st.text_input(
-            "Tên hiển thị (tab label)",
-            value=prefill["label"] if prefill else "",
-            placeholder="Nhóm miền Bắc",
-        )
-        st.markdown("**Cấu hình phân tích**")
-        fc1, fc2, fc3 = st.columns(3)
-        with fc1:
-            f_dep_low  = st.number_input("Cọc thấp (<)", value=int(prefill_cfg["deposit_low"]),  min_value=0)
-        with fc2:
-            f_dep_high = st.number_input("Cọc cao (>)",  value=int(prefill_cfg["deposit_high"]), min_value=0)
-        with fc3:
-            f_deadline = st.text_input("Deadline (giờ VN)", value=prefill_cfg["deadline"])
-        f_skip = st.text_input(
-            "Bỏ qua khỏi compliance check",
-            value=prefill_cfg["skip"],
-            placeholder="Tên Trưởng phòng, Tên Giám đốc",
-            help="Cách nhau bằng dấu phẩy",
-        )
-        btn_save, btn_cancel = st.columns(2)
-        with btn_save:
-            submitted = st.form_submit_button("💾 Lưu", use_container_width=True, type="primary")
-        with btn_cancel:
-            cancelled = st.form_submit_button("✕ Huỷ", use_container_width=True)
-
-    if submitted:
-        if not f_url.strip():
-            st.error("Group ID hoặc URL không được để trống.")
-        else:
-            gid = extract_group_id(f_url.strip())
-            label = f_label.strip() or (gid[-8:] if len(gid) >= 8 else gid)
-            new_entry = {
-                "url":      f_url.strip(),
-                "label":    label,
-                "selected": True if editing_idx is None else lib[editing_idx]["selected"],
-                "config": {
-                    "deposit_low":  int(f_dep_low),
-                    "deposit_high": int(f_dep_high),
-                    "deadline":     f_deadline,
-                    "skip":         f_skip,
-                },
-            }
-            if editing_idx is not None:
-                st.session_state.library[editing_idx] = new_entry
-            else:
-                st.session_state.library.append(new_entry)
-            _lib_save(st.session_state.library)
-            st.session_state.editing_idx = None
-            st.session_state.adding = False
-            st.rerun()
-
-    if cancelled:
-        st.session_state.editing_idx = None
-        st.session_state.adding = False
-        st.rerun()
+_new_lib = _df_to_lib(_edited_df)
+if _new_lib != st.session_state.library:
+    st.session_state.library = _new_lib
+    _lib_save(_new_lib)
 
 # ── Date range ────────────────────────────────────────────────────────────────
 
