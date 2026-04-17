@@ -529,13 +529,18 @@ def write_asm_excel(asm_data: dict, path) -> None:
     # ── Sheet 1: Shop Đặt Cọc ─────────────────────────────────────────────
     ws1 = wb.active
     ws1.title = "Shop Đặt Cọc"
-    ws1.append(["STT", "Shop", "Số đặt cọc", "Mức", "ASM"])
+    ws1.append(["STT", "Shop", "Số đặt cọc", "Ra tiêm", "Mức", "ASM"])
     style_header(ws1)
     all_shops = sorted(asm_data.get("all_shops", []),
                        key=lambda x: x["deposit_count"], reverse=True)
+    # Build ra_tiem lookup by shop_ref from parsed_reports if available
+    _ra_tiem_map = {r["shop_ref"]: r.get("ra_tiem_count")
+                    for r in asm_data.get("parsed_reports", []) if r.get("shop_ref")}
     for i, s in enumerate(all_shops, 1):
-        ws1.append([i, s["shop_ref"], s["deposit_count"], s["level"], s["sender"]])
-    set_widths(ws1, {1: 6, 2: 50, 3: 14, 4: 14, 5: 35})
+        ra = _ra_tiem_map.get(s["shop_ref"], "")
+        ws1.append([i, s["shop_ref"], s["deposit_count"],
+                    "" if ra is None else ra, s["level"], s["sender"]])
+    set_widths(ws1, {1: 6, 2: 50, 3: 14, 4: 12, 5: 14, 6: 35})
 
     # ── Sheet 2: Ý tưởng ASM ──────────────────────────────────────────────
     ws2 = wb.create_sheet("Ý tưởng ASM")
@@ -562,19 +567,45 @@ def write_asm_excel(asm_data: dict, path) -> None:
     set_widths(ws3, {1: 6, 2: 30, 3: 40, 4: 12, 5: 80})
     wrap_col(ws3, 5)
 
-    # ── Sheet 4: ASM chưa báo cáo ─────────────────────────────────────────
-    ws4 = wb.create_sheet("ASM chưa báo cáo")
-    ws4.append(["STT", "Tên ASM"])
+    # ── Sheet 4: Báo cáo muộn ─────────────────────────────────────────────
+    ws4 = wb.create_sheet("Báo cáo muộn")
+    ws4.append(["STT", "ASM", "Giờ gửi (UTC+7)"])
     style_header(ws4)
+    late = asm_data.get("late_reporters", [])
+    if late:
+        for i, lr in enumerate(late, 1):
+            ws4.append([i, lr["sender"], lr["sent_at_vn"]])
+    else:
+        ws4.append(["", "Không có ASM báo cáo muộn"])
+    set_widths(ws4, {1: 6, 2: 45, 3: 18})
+
+    # ── Sheet 5: Chưa báo cáo sau deadline ───────────────────────────────
+    ws5 = wb.create_sheet("Chưa báo cáo sau deadline")
+    ws5.append(["STT", "Tên ASM"])
+    style_header(ws5)
     missing = asm_data.get("missing_reporters")
     if missing is None:
-        ws4.append(["", "(Không thể kiểm tra — thiếu token/group)"])
+        ws5.append(["", "(Không thể kiểm tra — thiếu token/group)"])
     elif not missing:
-        ws4.append(["", "Tất cả ASM đã báo cáo"])
+        ws5.append(["", "Tất cả ASM đã báo cáo đúng hạn"])
     else:
         for i, name in enumerate(missing, 1):
-            ws4.append([i, name])
-    set_widths(ws4, {1: 6, 2: 45})
+            ws5.append([i, name])
+    set_widths(ws5, {1: 6, 2: 45})
+
+    # ── Sheet 6: Chưa báo cáo tại thời điểm chạy ─────────────────────────
+    ws6 = wb.create_sheet("Chưa báo cáo hiện tại")
+    ws6.append(["STT", "Tên thành viên"])
+    style_header(ws6)
+    unreported = asm_data.get("unreported_now")
+    if unreported is None:
+        ws6.append(["", "(Không thể kiểm tra — thiếu token/group)"])
+    elif not unreported:
+        ws6.append(["", "Tất cả đã báo cáo"])
+    else:
+        for i, name in enumerate(unreported, 1):
+            ws6.append([i, name])
+    set_widths(ws6, {1: 6, 2: 45})
 
     wb.save(path)
 

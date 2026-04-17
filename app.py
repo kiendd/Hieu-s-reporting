@@ -417,6 +417,7 @@ if run:
                 asm_data["late_reporters"] = check_late_reporters(
                     parsed, target_date, cfg["deadline"]
                 )
+                asm_data["parsed_reports"] = parsed
 
                 # D-1 analysis
                 asm_data_d1 = None
