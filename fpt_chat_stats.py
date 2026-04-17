@@ -18,7 +18,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, time, timezone
+from datetime import date as _date, datetime, timedelta, time, timezone
 
 try:
     import requests
@@ -415,6 +415,131 @@ def check_late_reporters(parsed_reports: list,
                 "sent_at_vn": vn_dt.strftime("%H:%M"),
             })
     return late
+
+
+def analyze_multiday(parsed_reports: list, date_from_str: str, date_to_str: str) -> dict:
+    """Phân tích báo cáo ASM theo từng ngày trong khoảng nhiều ngày."""
+    VN_OFFSET = 7 * 3600
+
+    d_from = datetime.strptime(date_from_str, "%Y-%m-%d").date()
+    d_to   = datetime.strptime(date_to_str,   "%Y-%m-%d").date()
+    total_days = (d_to - d_from).days + 1
+    all_dates  = [d_from + timedelta(days=i) for i in range(total_days)]
+
+    # Group reports by (date, sender)
+    by_date: dict[_date, list] = {d: [] for d in all_dates}
+    for r in parsed_reports:
+        dt = parse_dt(r.get("sent_at", ""))
+        if not dt:
+            continue
+        vn_dt = datetime.fromtimestamp(dt.timestamp() + VN_OFFSET, tz=timezone.utc)
+        if d_from <= vn_dt.date() <= d_to:
+            by_date[vn_dt.date()].append(r)
+
+    # All senders who appeared at least once
+    all_senders = sorted({r["sender"] for r in parsed_reports if r.get("sender")})
+
+    # daily_summary
+    daily_summary = []
+    for d in all_dates:
+        reps = by_date[d]
+        daily_summary.append({
+            "date":           d.strftime("%Y-%m-%d"),
+            "total_deposits": sum(r["deposit_count"] for r in reps if r.get("deposit_count") is not None),
+            "total_ra_tiem":  sum(r["ra_tiem_count"]  for r in reps if r.get("ra_tiem_count")  is not None),
+            "reporter_count": len({r["sender"] for r in reps}),
+        })
+
+    # Per-sender reported days set
+    sender_dates: dict[str, set] = {s: set() for s in all_senders}
+    for d, reps in by_date.items():
+        for r in reps:
+            if r.get("sender"):
+                sender_dates[r["sender"]].add(d)
+
+    # asm_summary with streak calculation
+    def _streaks(reported_set: set, all_d: list):
+        longest_streak = longest_gap = cur_streak = cur_gap = 0
+        for d in all_d:
+            if d in reported_set:
+                cur_streak += 1
+                cur_gap = 0
+            else:
+                cur_gap += 1
+                cur_streak = 0
+            longest_streak = max(longest_streak, cur_streak)
+            longest_gap    = max(longest_gap,    cur_gap)
+        return longest_streak, longest_gap
+
+    asm_summary = []
+    for sender in all_senders:
+        rep_dates = sender_dates[sender]
+        report_days = len(rep_dates)
+        report_rate = round(report_days / total_days * 100, 1) if total_days else 0
+        sender_reps = [r for r in parsed_reports
+                       if r.get("sender") == sender and r.get("deposit_count") is not None]
+        total_dep = sum(r["deposit_count"] for r in sender_reps)
+        avg_dep   = round(total_dep / report_days, 1) if report_days else 0
+        ls, lg    = _streaks(rep_dates, all_dates)
+        asm_summary.append({
+            "sender":              sender,
+            "report_days":         report_days,
+            "total_days":          total_days,
+            "report_rate":         report_rate,
+            "total_deposits":      total_dep,
+            "avg_deposits_per_day": avg_dep,
+            "longest_streak":      ls,
+            "longest_gap":         lg,
+        })
+    asm_summary.sort(key=lambda x: (-x["report_rate"], -x["total_deposits"]))
+
+    # missing_by_day
+    missing_by_day = []
+    for d in all_dates:
+        reported_today = {r["sender"] for r in by_date[d]}
+        missing = sorted(s for s in all_senders if s not in reported_today)
+        missing_by_day.append({
+            "date":          d.strftime("%Y-%m-%d"),
+            "missing_count": len(missing),
+            "missing_names": missing,
+        })
+
+    # shop_summary
+    shop_acc: dict[str, dict] = {}
+    for r in parsed_reports:
+        shop = r.get("shop_ref")
+        if not shop:
+            continue
+        dt = parse_dt(r.get("sent_at", ""))
+        if not dt:
+            continue
+        vn_dt = datetime.fromtimestamp(dt.timestamp() + VN_OFFSET, tz=timezone.utc)
+        if not (d_from <= vn_dt.date() <= d_to):
+            continue
+        dep = r.get("deposit_count") or 0
+        if shop not in shop_acc:
+            shop_acc[shop] = {"sender": r.get("sender", ""), "total_deposits": 0, "dates": set()}
+        shop_acc[shop]["total_deposits"] += dep
+        shop_acc[shop]["dates"].add(vn_dt.date())
+
+    shop_summary = sorted([
+        {
+            "shop_ref":      shop,
+            "sender":        v["sender"],
+            "total_deposits": v["total_deposits"],
+            "report_days":   len(v["dates"]),
+            "avg_deposits":  round(v["total_deposits"] / len(v["dates"]), 1) if v["dates"] else 0,
+        }
+        for shop, v in shop_acc.items()
+    ], key=lambda x: -x["total_deposits"])
+
+    return {
+        "total_days":     total_days,
+        "daily_summary":  daily_summary,
+        "asm_summary":    asm_summary,
+        "missing_by_day": missing_by_day,
+        "shop_summary":   shop_summary,
+    }
 
 
 # ---------------------------------------------------------------------------

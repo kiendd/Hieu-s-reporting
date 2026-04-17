@@ -82,6 +82,7 @@ def _migrate_legacy(groups_list: list, group_configs: dict) -> list:
 try:
     from fpt_chat_stats import (
         analyze_asm_reports,
+        analyze_multiday,
         build_session,
         check_asm_compliance,
         check_late_reporters,
@@ -377,6 +378,65 @@ def _render_result(r: dict) -> None:
     if not asm_msgs:
         st.warning("Không tìm thấy báo cáo ASM nào trong khoảng thời gian này.")
 
+    # ── Multi-day analytics (chỉ khi range > 1 ngày) ──────────────────────
+    multiday_data = r.get("multiday_data")
+    if multiday_data:
+        total_days = multiday_data["total_days"]
+
+        # 1. Xu hướng theo ngày
+        st.subheader("📈 Xu hướng theo ngày")
+        daily = multiday_data["daily_summary"]
+        if daily:
+            _df_daily = pd.DataFrame(daily).set_index("date")[["total_deposits", "total_ra_tiem"]]
+            _df_daily.columns = ["Tổng cọc", "Tổng ra tiêm"]
+            st.bar_chart(_df_daily, use_container_width=True)
+
+        # 2. Tổng kết ASM
+        st.subheader("👤 Tổng kết ASM")
+        asm_sum = multiday_data["asm_summary"]
+        if asm_sum:
+            st.dataframe(
+                [{
+                    "Nhân viên":       a["sender"],
+                    "Ngày báo/Tổng":   f"{a['report_days']}/{total_days}",
+                    "Tỉ lệ (%)":       a["report_rate"],
+                    "Chuỗi dài nhất":  a["longest_streak"],
+                    "Vắng dài nhất":   a["longest_gap"],
+                    "Tổng cọc":        a["total_deposits"],
+                    "TB cọc/ngày":     a["avg_deposits_per_day"],
+                } for a in asm_sum],
+                use_container_width=True, hide_index=True,
+            )
+
+        # 3. Ngày thiếu báo cáo
+        missing_days = [d for d in multiday_data["missing_by_day"] if d["missing_count"] > 0]
+        if missing_days:
+            st.subheader("📅 Ngày thiếu báo cáo")
+            st.dataframe(
+                [{
+                    "Ngày":       d["date"],
+                    "Số ASM vắng": d["missing_count"],
+                    "Tên ASM vắng": ", ".join(d["missing_names"]),
+                } for d in missing_days],
+                use_container_width=True, hide_index=True,
+            )
+
+        # 4. Tổng kết shop
+        shop_sum = multiday_data["shop_summary"]
+        if shop_sum:
+            st.subheader("🏪 Tổng kết shop (nhiều ngày)")
+            st.dataframe(
+                [{
+                    "Shop":            s["shop_ref"],
+                    "ASM":             s["sender"],
+                    "Tổng cọc":        s["total_deposits"],
+                    "Số ngày báo cáo": s["report_days"],
+                    "TB cọc/ngày":     s["avg_deposits"],
+                } for s in shop_sum],
+                use_container_width=True, hide_index=True,
+            )
+        st.divider()
+
     # ── Chart: cọc theo shop ───────────────────────────────────────────────
     all_shops_raw = sorted(asm_data.get("all_shops", []), key=lambda x: x["deposit_count"], reverse=True)
     if all_shops_raw:
@@ -626,6 +686,14 @@ if run:
                 )
                 asm_data["parsed_reports"] = parsed
 
+                # Multi-day analysis
+                multiday_data = None
+                if not _is_single_day:
+                    try:
+                        multiday_data = analyze_multiday(parsed, date_from_str, date_to_str)
+                    except Exception:
+                        multiday_data = None
+
                 # D-1 analysis
                 asm_data_d1 = None
                 if _is_single_day and _d1_from:
@@ -656,16 +724,17 @@ if run:
 
                 status.update(label=f"✓ {tab_label}", state="complete")
                 results.append({
-                    "tab_label":     tab_label,
-                    "group_id":      group_id,
-                    "asm_data":      asm_data,
-                    "asm_data_d1":   asm_data_d1,
-                    "asm_msgs":      asm_msgs,
-                    "excel_buf":     excel_buf,
-                    "target_date":   target_date,
-                    "past_deadline": _now_hhmm >= cfg["deadline"],
+                    "tab_label":      tab_label,
+                    "group_id":       group_id,
+                    "asm_data":       asm_data,
+                    "asm_data_d1":    asm_data_d1,
+                    "multiday_data":  multiday_data,
+                    "asm_msgs":       asm_msgs,
+                    "excel_buf":      excel_buf,
+                    "target_date":    target_date,
+                    "past_deadline":  _now_hhmm >= cfg["deadline"],
                     "parsed_reports": parsed,
-                    "error":         None,
+                    "error":          None,
                 })
             except Exception as exc:
                 status.update(label=f"✗ {entry['label']}", state="error")
