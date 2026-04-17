@@ -92,6 +92,7 @@ try:
         filter_by_date,
         parse_asm_report,
         parse_date_arg,
+        to_vn_str,
         write_asm_excel,
     )
 except ImportError as e:
@@ -447,15 +448,16 @@ if run:
 
                 status.update(label=f"✓ {tab_label}", state="complete")
                 results.append({
-                    "tab_label":    tab_label,
-                    "group_id":     group_id,
-                    "asm_data":     asm_data,
-                    "asm_data_d1":  asm_data_d1,
-                    "asm_msgs":     asm_msgs,
-                    "excel_buf":    excel_buf,
-                    "target_date":  target_date,
+                    "tab_label":     tab_label,
+                    "group_id":      group_id,
+                    "asm_data":      asm_data,
+                    "asm_data_d1":   asm_data_d1,
+                    "asm_msgs":      asm_msgs,
+                    "excel_buf":     excel_buf,
+                    "target_date":   target_date,
                     "past_deadline": _now_hhmm >= cfg["deadline"],
-                    "error":        None,
+                    "parsed_reports": parsed,
+                    "error":         None,
                 })
             except Exception as exc:
                 status.update(label=f"✗ {entry['label']}", state="error")
@@ -632,6 +634,60 @@ if run:
                 )
             else:
                 st.success("Tất cả ASM đã báo cáo đúng hạn")
+
+        # ── Chi tiết theo shop / nhân viên ─────────────────────────────────────
+        parsed_reports = r.get("parsed_reports", [])
+        if parsed_reports:
+            with st.expander("🔍 Xem chi tiết"):
+                det_col1, det_col2 = st.columns(2)
+
+                # --- Theo shop ---
+                with det_col1:
+                    shop_list = [p["shop_ref"] for p in parsed_reports if p.get("shop_ref")]
+                    sel_shop = st.selectbox("Theo shop", [None] + shop_list,
+                                            format_func=lambda x: "— chọn shop —" if x is None else x,
+                                            key=f"sel_shop_{r['group_id']}")
+                    if sel_shop:
+                        report = next((p for p in parsed_reports if p.get("shop_ref") == sel_shop), None)
+                        if report:
+                            d1_val = d1_shop_map.get(sel_shop, "—") if d1_shop_map else "—"
+                            st.markdown(f"**ASM:** {report['sender']}")
+                            st.markdown(f"**Số cọc:** {report['deposit_count']}  |  **Cọc D-1:** {d1_val}  |  **Ra tiêm:** {report.get('ra_tiem_count', '—')}")
+                            st.markdown(f"**Giờ gửi:** {to_vn_str(report['sent_at'])}")
+                            if report.get("tich_cuc"):
+                                st.markdown("**Tích cực:**")
+                                st.text(report["tich_cuc"])
+                            if report.get("van_de"):
+                                st.markdown("**Vấn đề:**")
+                                st.text(report["van_de"])
+                            if report.get("da_lam"):
+                                st.markdown("**Đã làm:**")
+                                st.text(report["da_lam"])
+
+                # --- Theo nhân viên ---
+                with det_col2:
+                    asm_list = sorted({p["sender"] for p in parsed_reports if p.get("sender")})
+                    sel_asm = st.selectbox("Theo nhân viên", [None] + asm_list,
+                                           format_func=lambda x: "— chọn nhân viên —" if x is None else x,
+                                           key=f"sel_asm_{r['group_id']}")
+                    if sel_asm:
+                        asm_reports = [p for p in parsed_reports if p.get("sender") == sel_asm]
+                        for report in asm_reports:
+                            shop = report.get("shop_ref", "?")
+                            d1_val = d1_shop_map.get(shop, "—") if d1_shop_map else "—"
+                            st.markdown(f"**Shop:** {shop}")
+                            st.markdown(f"**Số cọc:** {report['deposit_count']}  |  **Cọc D-1:** {d1_val}  |  **Ra tiêm:** {report.get('ra_tiem_count', '—')}")
+                            st.markdown(f"**Giờ gửi:** {to_vn_str(report['sent_at'])}")
+                            if report.get("tich_cuc"):
+                                st.markdown("**Tích cực:**")
+                                st.text(report["tich_cuc"])
+                            if report.get("van_de"):
+                                st.markdown("**Vấn đề:**")
+                                st.text(report["van_de"])
+                            if report.get("da_lam"):
+                                st.markdown("**Đã làm:**")
+                                st.text(report["da_lam"])
+                            st.divider()
 
     st.divider()
     if len(results) == 1:
