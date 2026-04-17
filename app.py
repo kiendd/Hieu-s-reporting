@@ -11,11 +11,17 @@ from datetime import date, datetime, timezone
 import streamlit as st
 from streamlit_javascript import st_javascript
 
-# ── localStorage helpers (browser-side, mỗi user riêng, không gửi lên server) ─
+# ── localStorage helpers ──────────────────────────────────────────────────────
 
 def _ls_get(key: str) -> str:
+    """Read from localStorage. Returns '' if key missing or JS not yet ready."""
     val = st_javascript(f"localStorage.getItem({json.dumps(key)}) || ''")
     return val if isinstance(val, str) else ""
+
+def _ls_get_nullable(key: str):
+    """Returns None on first render (JS not ready); '' if key missing; str if key exists."""
+    val = st_javascript(f"localStorage.getItem({json.dumps(key)}) ?? ''")
+    return val if isinstance(val, str) else None
 
 def _ls_set(key: str, value: str) -> None:
     st_javascript(f"localStorage.setItem({json.dumps(key)}, {json.dumps(value)}); 'ok'")
@@ -35,46 +41,41 @@ def _load_config() -> dict:
             pass
     return {}
 
-def _save_groups_local(groups: list) -> None:
-    """Lưu danh sách groups vào config.json khi chạy local."""
-    if not os.path.isfile(_CONFIG_PATH):
-        return
-    cfg = _load_config()
-    cfg["groups"] = groups
-    cfg.pop("group", None)
-    try:
-        with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+# ── Group Library helpers ─────────────────────────────────────────────────────
 
-# ── Group input helpers ───────────────────────────────────────────────────────
+_LIB_KEY = "fpt_groups_library"
+_LIB_DEFAULTS = {"deposit_low": 2, "deposit_high": 5, "deadline": "20:00", "skip": ""}
 
-def _parse_group_line(line: str):
-    """Parse 'group_id_or_url | optional label' → (group_str, label_or_None)."""
-    if "|" in line:
-        parts = line.split("|", 1)
-        label = parts[1].strip()
-        return parts[0].strip(), label or None
-    return line.strip(), None
+def _lib_save(lib: list) -> None:
+    _ls_set(_LIB_KEY, json.dumps(lib))
 
-def _resolve_tab_label(group_id: str, custom_label, group_info: dict) -> str:
-    if custom_label:
-        return custom_label
-    name = group_info.get("name") or group_info.get("title") or ""
-    if name:
-        return name
-    return group_id[-8:] if len(group_id) >= 8 else group_id
+def _make_entry(url: str, label: str = "", selected: bool = True, config: dict | None = None) -> dict:
+    from fpt_chat_stats import extract_group_id as _eid
+    gid = _eid(url)
+    return {
+        "url":      url,
+        "label":    label or (gid[-8:] if len(gid) >= 8 else gid),
+        "selected": selected,
+        "config":   {**_LIB_DEFAULTS, **(config or {})},
+    }
 
-# ── Per-group config helpers ──────────────────────────────────────────────────
+def _migrate_legacy(groups_list: list, group_configs: dict) -> list:
+    """Migrate fpt_groups (string array) + fpt_group_configs → library entries."""
+    from fpt_chat_stats import extract_group_id as _eid
+    lib = []
+    for url in groups_list:
+        gid = _eid(url)
+        cfg = group_configs.get(gid, {})
+        merged_cfg = {**_LIB_DEFAULTS, **cfg}
+        lib.append({
+            "url":      url,
+            "label":    gid[-8:] if len(gid) >= 8 else gid,
+            "selected": True,
+            "config":   merged_cfg,
+        })
+    return lib
 
-_CFG_DEFAULTS = {"deposit_low": 2, "deposit_high": 5, "deadline": "20:00", "skip": ""}
-
-def _get_group_cfg(group_configs: dict, group_id: str) -> dict:
-    stored = group_configs.get(group_id, {})
-    return {k: stored.get(k, v) for k, v in _CFG_DEFAULTS.items()}
-
-# ── Import core logic từ fpt_chat_stats ──────────────────────────────────────
+# ── Import core logic ─────────────────────────────────────────────────────────
 
 try:
     from fpt_chat_stats import (
@@ -111,56 +112,60 @@ div[data-testid="stElementContainer"]:has(iframe[data-testid="stCustomComponentV
 </style>
 """, unsafe_allow_html=True)
 
-# ── Đọc localStorage ──────────────────────────────────────────────────────────
+# ── Session state init ────────────────────────────────────────────────────────
 
-_cfg = _load_config()
+for _k, _v in [("library", []), ("editing_idx", None), ("adding", False), ("ls_loaded", False)]:
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+# ── Load library from localStorage (retry until JS resolves) ─────────────────
+
+if not st.session_state.ls_loaded:
+    _raw_lib = _ls_get_nullable(_LIB_KEY)
+    if _raw_lib is not None:
+        # JS has resolved — parse or migrate
+        if _raw_lib:
+            try:
+                st.session_state.library = json.loads(_raw_lib)
+            except Exception:
+                st.session_state.library = []
+        else:
+            # No library yet — try legacy migration
+            _cfg_file    = _load_config()
+            _raw_groups  = _ls_get_nullable("fpt_groups") or ""
+            _raw_cfgs    = _ls_get_nullable("fpt_group_configs") or ""
+            _groups_list: list = []
+            _group_cfgs:  dict = {}
+            if _raw_groups:
+                try:
+                    _groups_list = json.loads(_raw_groups)
+                except Exception:
+                    pass
+            elif isinstance(_cfg_file.get("groups"), list):
+                _groups_list = _cfg_file["groups"]
+            elif _cfg_file.get("group"):
+                _groups_list = [_cfg_file["group"]]
+            if _raw_cfgs:
+                try:
+                    _group_cfgs = json.loads(_raw_cfgs)
+                except Exception:
+                    pass
+            if _groups_list:
+                st.session_state.library = _migrate_legacy(_groups_list, _group_cfgs)
+                _lib_save(st.session_state.library)
+            else:
+                st.session_state.library = []
+        st.session_state.ls_loaded = True
+
+# ── Token ─────────────────────────────────────────────────────────────────────
+
 _saved_token = _ls_get("fpt_token")
 
-# Groups: fpt_groups (JSON array) → fpt_group (string cũ) → config.json
-_raw_groups_json = _ls_get("fpt_groups")
-if _raw_groups_json:
-    try:
-        _saved_groups_list = json.loads(_raw_groups_json)
-    except Exception:
-        _saved_groups_list = []
-else:
-    _legacy = _ls_get("fpt_group") or ""
-    if _legacy:
-        _saved_groups_list = [_legacy]
-    else:
-        cfg_groups = _cfg.get("groups")
-        if isinstance(cfg_groups, list):
-            _saved_groups_list = cfg_groups
-        elif _cfg.get("group"):
-            _saved_groups_list = [_cfg["group"]]
-        else:
-            _saved_groups_list = []
-
-_saved_groups_text = "\n".join(_saved_groups_list)
-
-# Per-group configs
-_raw_group_configs = _ls_get("fpt_group_configs")
-_group_configs: dict = {}
-if _raw_group_configs:
-    try:
-        _group_configs = json.loads(_raw_group_configs)
-    except Exception:
-        pass
-
-# Pre-fill expander từ config của nhóm đầu tiên
-_first_group_cfg = _CFG_DEFAULTS.copy()
-if _saved_groups_list:
-    _first_str, _ = _parse_group_line(_saved_groups_list[0])
-    _first_id = extract_group_id(_first_str)
-    _first_group_cfg = _get_group_cfg(_group_configs, _first_id)
-
-# ── UI: Header ────────────────────────────────────────────────────────────────
+# ── Page header ───────────────────────────────────────────────────────────────
 
 st.title("📊 FPT Chat ASM Report")
 st.caption("Phân tích báo cáo hàng ngày của ASM từ FPT Chat")
 st.divider()
-
-# ── Vùng 1: Kết nối ──────────────────────────────────────────────────────────
 
 token = st.text_input(
     "Token (Bearer)",
@@ -170,19 +175,140 @@ token = st.text_input(
     help="DevTools → Network → chọn request api-chat.fpt.com → Headers → Authorization: Bearer <token>",
 )
 
-groups_text = st.text_area(
-    "Nhóm chat",
-    value=_saved_groups_text,
-    height=120,
-    placeholder=(
-        "Một nhóm mỗi dòng. Tuỳ chọn: thêm | Tên tab sau group ID/URL\n"
-        "686b517a54ca42cb3c30e1df\n"
-        "https://chat.fpt.com/group/abc123 | Nhóm miền Nam"
-    ),
-)
+# ── Group Library ─────────────────────────────────────────────────────────────
 
-# ── Vùng 2: Thời gian ────────────────────────────────────────────────────────
+hdr_col, add_col = st.columns([5, 1])
+with hdr_col:
+    st.markdown("**📋 Nhóm chat**")
+with add_col:
+    if st.button("+ Thêm nhóm", use_container_width=True):
+        st.session_state.adding = True
+        st.session_state.editing_idx = None
+        st.rerun()
 
+lib = st.session_state.library
+
+if not lib:
+    st.caption("Chưa có nhóm nào. Nhấn **+ Thêm nhóm** để bắt đầu.")
+else:
+    for i, entry in enumerate(lib):
+        gid      = extract_group_id(entry["url"])
+        short_id = gid[-8:] if len(gid) >= 8 else gid
+        cfg      = entry["config"]
+        cfg_summary = (
+            f"cọc {cfg['deposit_low']}–{cfg['deposit_high']} · {cfg['deadline']}"
+            + (f" · bỏ qua: {cfg['skip']}" if cfg["skip"] else "")
+        )
+
+        c_chk, c_info, c_edit, c_del = st.columns([0.5, 5.5, 0.7, 0.7])
+        with c_chk:
+            new_sel = st.checkbox(
+                "sel",
+                value=entry["selected"],
+                key=f"sel_{i}",
+                label_visibility="collapsed",
+            )
+            if new_sel != entry["selected"]:
+                st.session_state.library[i]["selected"] = new_sel
+                _lib_save(st.session_state.library)
+        with c_info:
+            st.markdown(
+                f"**{entry['label']}** &nbsp;`{short_id}`&nbsp; "
+                f"<span style='color:gray;font-size:0.85em'>{cfg_summary}</span>",
+                unsafe_allow_html=True,
+            )
+        with c_edit:
+            if st.button("✏", key=f"edit_{i}", use_container_width=True, help="Sửa cấu hình"):
+                st.session_state.editing_idx = i
+                st.session_state.adding = False
+                st.rerun()
+        with c_del:
+            if st.button("🗑", key=f"del_{i}", use_container_width=True, help="Xóa nhóm"):
+                st.session_state.library.pop(i)
+                if st.session_state.editing_idx == i:
+                    st.session_state.editing_idx = None
+                elif isinstance(st.session_state.editing_idx, int) and st.session_state.editing_idx > i:
+                    st.session_state.editing_idx -= 1
+                _lib_save(st.session_state.library)
+                st.rerun()
+
+# ── Add / Edit form ───────────────────────────────────────────────────────────
+
+editing_idx = st.session_state.editing_idx
+show_form   = st.session_state.adding or editing_idx is not None
+
+if show_form:
+    st.divider()
+    prefill     = lib[editing_idx] if editing_idx is not None else None
+    prefill_cfg = prefill["config"] if prefill else _LIB_DEFAULTS
+    form_title  = f"✏ Sửa nhóm: **{prefill['label']}**" if prefill else "**+ Thêm nhóm mới**"
+    st.markdown(form_title)
+
+    with st.form("group_form", border=True):
+        f_url = st.text_input(
+            "Group ID hoặc URL nhóm chat *",
+            value=prefill["url"] if prefill else "",
+            placeholder="686b517a54ca42cb3c30e1df hoặc URL đầy đủ",
+        )
+        f_label = st.text_input(
+            "Tên hiển thị (tab label)",
+            value=prefill["label"] if prefill else "",
+            placeholder="Nhóm miền Bắc",
+        )
+        st.markdown("**Cấu hình phân tích**")
+        fc1, fc2, fc3 = st.columns(3)
+        with fc1:
+            f_dep_low  = st.number_input("Cọc thấp (<)", value=int(prefill_cfg["deposit_low"]),  min_value=0)
+        with fc2:
+            f_dep_high = st.number_input("Cọc cao (>)",  value=int(prefill_cfg["deposit_high"]), min_value=0)
+        with fc3:
+            f_deadline = st.text_input("Deadline (giờ VN)", value=prefill_cfg["deadline"])
+        f_skip = st.text_input(
+            "Bỏ qua khỏi compliance check",
+            value=prefill_cfg["skip"],
+            placeholder="Tên Trưởng phòng, Tên Giám đốc",
+            help="Cách nhau bằng dấu phẩy",
+        )
+        btn_save, btn_cancel = st.columns(2)
+        with btn_save:
+            submitted = st.form_submit_button("💾 Lưu", use_container_width=True, type="primary")
+        with btn_cancel:
+            cancelled = st.form_submit_button("✕ Huỷ", use_container_width=True)
+
+    if submitted:
+        if not f_url.strip():
+            st.error("Group ID hoặc URL không được để trống.")
+        else:
+            gid = extract_group_id(f_url.strip())
+            label = f_label.strip() or (gid[-8:] if len(gid) >= 8 else gid)
+            new_entry = {
+                "url":      f_url.strip(),
+                "label":    label,
+                "selected": True if editing_idx is None else lib[editing_idx]["selected"],
+                "config": {
+                    "deposit_low":  int(f_dep_low),
+                    "deposit_high": int(f_dep_high),
+                    "deadline":     f_deadline,
+                    "skip":         f_skip,
+                },
+            }
+            if editing_idx is not None:
+                st.session_state.library[editing_idx] = new_entry
+            else:
+                st.session_state.library.append(new_entry)
+            _lib_save(st.session_state.library)
+            st.session_state.editing_idx = None
+            st.session_state.adding = False
+            st.rerun()
+
+    if cancelled:
+        st.session_state.editing_idx = None
+        st.session_state.adding = False
+        st.rerun()
+
+# ── Date range ────────────────────────────────────────────────────────────────
+
+st.divider()
 date_mode = st.radio(
     "Khoảng thời gian",
     ["Hôm nay", "Chọn khoảng ngày"],
@@ -198,43 +324,25 @@ if not use_today:
     with col2:
         date_to_input = st.date_input("Đến ngày", value=date.today())
 
-# ── Vùng 3: Tuỳ chọn nâng cao (pre-fill từ config nhóm đầu tiên) ─────────────
+# ── Run button ────────────────────────────────────────────────────────────────
 
-with st.expander("⚙️ Tuỳ chọn nâng cao"):
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        deposit_low  = st.number_input("Ngưỡng cọc thấp (<)", value=int(_first_group_cfg["deposit_low"]),  min_value=0)
-    with c2:
-        deposit_high = st.number_input("Ngưỡng cọc cao (>)",  value=int(_first_group_cfg["deposit_high"]), min_value=0)
-    with c3:
-        deadline = st.text_input("Deadline (giờ VN)", value=_first_group_cfg["deadline"])
-    skip_str = st.text_input(
-        "Bỏ qua khỏi compliance check",
-        value=_first_group_cfg["skip"],
-        placeholder="Tên Trưởng phòng, Tên Giám đốc",
-        help="Cách nhau bằng dấu phẩy",
-    )
-
-# ── Nút chạy ─────────────────────────────────────────────────────────────────
-
-run = st.button("▶ Chạy phân tích", type="primary", use_container_width=True)
+selected_groups = [e for e in st.session_state.library if e.get("selected")]
+n_sel = len(selected_groups)
+run = st.button(
+    f"▶ Chạy {n_sel} nhóm đã chọn" if n_sel else "▶ Chạy phân tích",
+    type="primary",
+    use_container_width=True,
+)
 
 if run:
     if not token:
         st.error("Vui lòng nhập Token.")
         st.stop()
-
-    group_lines = [l.strip() for l in groups_text.splitlines() if l.strip()]
-    if not group_lines:
-        st.error("Vui lòng nhập ít nhất một Group ID hoặc URL.")
+    if not selected_groups:
+        st.error("Vui lòng chọn ít nhất một nhóm.")
         st.stop()
 
-    parsed_groups = [_parse_group_line(l) for l in group_lines]
-
-    # Lưu vào localStorage
     _ls_set("fpt_token", token)
-    _ls_set("fpt_groups", json.dumps(group_lines))
-    _save_groups_local(group_lines)
 
     # Tính date range
     VN_OFFSET = 7 * 3600
@@ -251,37 +359,26 @@ if run:
     date_from = parse_date_arg(date_from_str, end_of_day=False)
     date_to   = parse_date_arg(date_to_str,   end_of_day=True)
 
-    # Config từ expander (dùng cho nhóm chưa có config riêng)
-    expander_config = {
-        "deposit_low":  int(deposit_low),
-        "deposit_high": int(deposit_high),
-        "deadline":     deadline,
-        "skip":         skip_str,
-    }
-
-    group_configs = dict(_group_configs)
-
     # ── Fetch & analyze từng nhóm ─────────────────────────────────────────────
+
     results = []
-    for group_str, custom_label in parsed_groups:
-        group_id = extract_group_id(group_str)
+    for entry in selected_groups:
+        group_id = extract_group_id(entry["url"])
         short_id = group_id[-8:] if len(group_id) >= 8 else group_id
-
-        # Dùng config đã lưu; nhóm mới → lưu từ expander
-        if group_id in group_configs:
-            cfg = _get_group_cfg(group_configs, group_id)
-        else:
-            cfg = expander_config.copy()
-            group_configs[group_id] = cfg
-
+        cfg      = entry["config"]
         skip_list = [s.strip() for s in cfg["skip"].split(",") if s.strip()]
 
-        with st.status(f"Đang xử lý {short_id}…", expanded=False) as status:
+        with st.status(f"Đang xử lý {entry['label']}…", expanded=False) as status:
             try:
                 session = build_session(token)
 
+                # Dùng label đã lưu; chỉ ghi đè nếu label vẫn là short_id placeholder
                 group_info = fetch_group_info(session, "https://api-chat.fpt.com", group_id)
-                tab_label  = _resolve_tab_label(group_id, custom_label, group_info)
+                tab_label  = entry["label"]
+                if tab_label == short_id:
+                    api_name = group_info.get("name") or group_info.get("title") or ""
+                    if api_name:
+                        tab_label = api_name
 
                 messages = fetch_all_messages(token=token, group_id=group_id, date_from=date_from)
                 messages = filter_by_date(messages, date_from, date_to)
@@ -292,7 +389,7 @@ if run:
                 except Exception:
                     members = []
 
-                parsed = [parse_asm_report(m) for m in asm_msgs]
+                parsed   = [parse_asm_report(m) for m in asm_msgs]
                 asm_data = analyze_asm_reports(
                     parsed,
                     deposit_low=cfg["deposit_low"],
@@ -315,20 +412,16 @@ if run:
                     "asm_data":    asm_data,
                     "asm_msgs":    asm_msgs,
                     "excel_buf":   excel_buf,
-                    "config":      cfg,
                     "target_date": target_date,
                     "error":       None,
                 })
-            except Exception as e:
-                status.update(label=f"✗ {short_id}", state="error")
+            except Exception as exc:
+                status.update(label=f"✗ {entry['label']}", state="error")
                 results.append({
-                    "tab_label": custom_label or short_id,
+                    "tab_label": entry["label"],
                     "group_id":  group_id,
-                    "error":     str(e),
+                    "error":     str(exc),
                 })
-
-    # Lưu config đã cập nhật
-    _ls_set("fpt_group_configs", json.dumps(group_configs))
 
     # ── Render kết quả ────────────────────────────────────────────────────────
 
@@ -340,21 +433,10 @@ if run:
         asm_data    = r["asm_data"]
         asm_msgs    = r["asm_msgs"]
         excel_buf   = r["excel_buf"]
-        cfg         = r["config"]
         target_date = r["target_date"]
         group_id    = r["group_id"]
         short_id    = group_id[-8:] if len(group_id) >= 8 else group_id
 
-        # Config đã dùng
-        with st.expander("⚙️ Cấu hình đã dùng", expanded=False):
-            cc1, cc2, cc3 = st.columns(3)
-            cc1.metric("Cọc thấp (<)", cfg["deposit_low"])
-            cc2.metric("Cọc cao (>)",  cfg["deposit_high"])
-            cc3.metric("Deadline",     cfg["deadline"])
-            if cfg["skip"]:
-                st.caption(f"Bỏ qua: {cfg['skip']}")
-
-        # Header + Download
         col_hdr, col_dl = st.columns([4, 1])
         with col_hdr:
             st.subheader("Kết quả phân tích")
@@ -367,7 +449,6 @@ if run:
                 use_container_width=True,
             )
 
-        # Metrics
         col_a, col_b, col_c = st.columns(3)
         col_a.metric("Báo cáo ASM",   len(asm_msgs))
         col_b.metric("Shop cọc thấp", len(asm_data["low_deposit_shops"]))
@@ -376,7 +457,6 @@ if run:
         if not asm_msgs:
             st.warning("Không tìm thấy báo cáo ASM nào trong khoảng thời gian này.")
 
-        # Shop đặt cọc
         st.subheader("🏪 Shop đặt cọc")
         all_shops = sorted(asm_data.get("all_shops", []), key=lambda x: x["deposit_count"], reverse=True)
         if all_shops:
@@ -388,7 +468,6 @@ if run:
         else:
             st.caption("(không có)")
 
-        # Ý tưởng ASM
         st.subheader("💡 Ý tưởng triển khai từ ASM")
         ideas = asm_data.get("ideas", [])
         if ideas:
@@ -400,7 +479,6 @@ if run:
         else:
             st.caption("(không có)")
 
-        # Điểm nổi bật
         st.subheader("⭐ Điểm nổi bật")
         tich_cuc = asm_data["highlights"]["tich_cuc"]
         han_che  = asm_data["highlights"]["han_che"]
@@ -415,7 +493,6 @@ if run:
         else:
             st.caption("(không có)")
 
-        # ASM chưa báo cáo
         missing = asm_data.get("missing_reporters")
         if missing is not None:
             st.subheader("⚠️ ASM chưa báo cáo")

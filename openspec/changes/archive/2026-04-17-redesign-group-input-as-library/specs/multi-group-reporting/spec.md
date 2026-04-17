@@ -1,8 +1,5 @@
-# multi-group-reporting Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change add-multi-group-support. Update Purpose after archive.
-## Requirements
 ### Requirement: Multi-Group Input
 The web UI SHALL manage groups through a **Group Library** — a persistent, ordered list of group entries. Each entry contains a URL/ID, a display label, a selected flag, and a per-group advanced config.
 
@@ -42,62 +39,6 @@ At least one group with `selected=True` MUST exist before analysis can start.
 
 ---
 
-### Requirement: Per-Group Tabbed Results
-After analysis completes, the web UI SHALL display results in a `st.tabs` widget with one tab per analyzed group.
-
-Tab label resolution order (highest priority first):
-1. Custom label provided by the user in the text area (after ` | `)
-2. Group name fetched from the FPT Chat API (`fetch_group_info`)
-3. Last 8 characters of the group hex ID (fallback)
-
-#### Scenario: Two groups analyzed successfully
-- **WHEN** two groups were analyzed and both succeeded
-- **THEN** two tabs appear; each tab contains the full analysis result (metrics, tables) for its group
-
-#### Scenario: One group succeeds, one fails
-- **WHEN** group A fetches successfully but group B returns an API error
-- **THEN** two tabs appear; tab A shows results normally; tab B shows an error message describing the failure
-
-#### Scenario: Custom label used as tab name
-- **WHEN** the user entered `686b517a54ca42cb3c30e1df | Nhóm miền Bắc`
-- **THEN** the tab label is `Nhóm miền Bắc` regardless of what the API returns
-
-#### Scenario: API group name used when no custom label
-- **WHEN** no custom label is given and `fetch_group_info` returns `{"name": "ASM Hà Nội"}`
-- **THEN** the tab label is `ASM Hà Nội`
-
-#### Scenario: Short ID fallback
-- **WHEN** no custom label is given and `fetch_group_info` returns `{}` or fails
-- **THEN** the tab label is the last 8 characters of the group ID (e.g. `3c30e1df`)
-
----
-
-### Requirement: Group Info Fetching
-The `fpt_chat_stats` module SHALL expose a `fetch_group_info(session, base_url, group_id) -> dict` function that calls `GET /group-management/group/{group_id}` and returns the response JSON. If the request fails (non-2xx or exception), the function SHALL return `{}` without raising.
-
-#### Scenario: Successful response with name
-- **WHEN** the API returns `{"name": "ASM Hà Nội", ...}`
-- **THEN** `fetch_group_info` returns a dict containing at least `{"name": "ASM Hà Nội"}`
-
-#### Scenario: API error or timeout
-- **WHEN** the endpoint returns 404 or raises a connection error
-- **THEN** `fetch_group_info` returns `{}` and does not propagate the exception
-
----
-
-### Requirement: Per-Group Excel Download
-Each result tab SHALL contain a download button for an Excel file scoped to that group only. The file name SHALL follow the pattern `asm_report_<group_short>_<date>.xlsx` where `<group_short>` is the last 8 characters of the group ID and `<date>` is the analysis date or end date of the date range.
-
-#### Scenario: Download button per tab
-- **WHEN** three groups are analyzed
-- **THEN** three download buttons appear, one in each tab, each producing a distinct `.xlsx` file
-
-#### Scenario: File name includes group identifier
-- **WHEN** group ID is `686b517a54ca42cb3c30e1df` and date is `2026-04-17`
-- **THEN** the downloaded file is named `asm_report_3c30e1df_2026-04-17.xlsx`
-
----
-
 ### Requirement: Multi-Group Persistence
 The web UI SHALL persist the Group Library in browser localStorage under the key `fpt_groups_library` as a JSON-encoded array of objects. Each object contains: `url`, `label`, `selected`, and `config` (with keys `deposit_low`, `deposit_high`, `deadline`, `skip`).
 
@@ -122,4 +63,3 @@ When `fpt_groups_library` is absent, the UI SHALL migrate from the legacy keys `
 #### Scenario: No legacy data
 - **WHEN** both `fpt_groups_library` and legacy keys are absent
 - **THEN** the library starts empty with no rows shown
-
