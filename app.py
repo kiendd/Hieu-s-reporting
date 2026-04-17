@@ -451,10 +451,9 @@ if run:
         st.subheader("💡 Ý tưởng triển khai từ ASM")
         ideas = asm_data.get("ideas", [])
         if ideas:
-            st.dataframe(
+            st.table(
                 [{"ASM": i["sender"], "Shop": i["shop_ref"], "Nội dung": i["da_lam"]}
-                 for i in ideas],
-                use_container_width=True, hide_index=True,
+                 for i in ideas]
             )
         else:
             st.caption("(không có)")
@@ -469,7 +468,7 @@ if run:
                for h in han_che]
         )
         if highlights:
-            st.dataframe(highlights, use_container_width=True, hide_index=True)
+            st.table(highlights)
         else:
             st.caption("(không có)")
 
