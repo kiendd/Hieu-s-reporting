@@ -75,7 +75,19 @@ st.set_page_config(
 
 st.title("📊 FPT Chat ASM Report")
 st.caption("Phân tích báo cáo hàng ngày của ASM từ FPT Chat")
-st.divider()
+
+# Ẩn iframe của streamlit-javascript (height=0 nhưng vẫn chiếm không gian)
+st.markdown("""
+<style>
+div[data-testid="stCustomComponentV1"] {
+    height: 0 !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: hidden !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # ── Vùng 1: Kết nối ──────────────────────────────────────────────────────────
 # Token: localStorage (browser) — không bao giờ đọc/ghi file
@@ -83,6 +95,8 @@ st.divider()
 _cfg = _load_config()
 _saved_token = _ls_get("fpt_token")
 _saved_group = _ls_get("fpt_group") or _cfg.get("group", "")
+
+st.divider()
 
 col_token, col_group = st.columns(2)
 with col_token:
