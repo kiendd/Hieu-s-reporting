@@ -20,3 +20,6 @@ __pycache__/
 
 # Generated Excel reports
 *.xlsx
+
+# Mac launcher app (tạo bằng setup_mac.sh, không commit binary)
+*.app
