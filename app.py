@@ -546,9 +546,10 @@ if run:
         if low_shops:
             st.subheader("📉 Shop cọc thấp")
             def _low_row(s):
+                d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
                 row = {"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
-                if d1_shop_map is not None:
-                    row["Cọc D-1"] = d1_shop_map.get(s["shop_ref"], "—")
+                if d1 is not None:
+                    row["Cọc D-1"] = d1
                 return row
             st.dataframe(
                 [_low_row(s) for s in sorted(low_shops, key=lambda x: x["deposit_count"])],
@@ -560,9 +561,10 @@ if run:
         if high_shops:
             st.subheader("🏆 Nhân viên phát sinh cọc tốt")
             def _high_row(s):
+                d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
                 row = {"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
-                if d1_shop_map is not None:
-                    row["Cọc D-1"] = d1_shop_map.get(s["shop_ref"], "—")
+                if d1 is not None:
+                    row["Cọc D-1"] = d1
                 return row
             st.dataframe(
                 [_high_row(s) for s in sorted(high_shops, key=lambda x: x["deposit_count"], reverse=True)],
@@ -582,9 +584,12 @@ if run:
         all_shops = sorted(asm_data.get("all_shops", []), key=lambda x: x["deposit_count"], reverse=True)
         if all_shops:
             def _shop_row(s):
-                row = {"Shop": s["shop_ref"], "Số cọc": s["deposit_count"], "Mức": s["level"], "ASM": s["sender"]}
-                if d1_shop_map is not None:
-                    row["Cọc D-1"] = d1_shop_map.get(s["shop_ref"], "—")
+                d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
+                row = {"Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
+                if d1 is not None:
+                    row["Cọc D-1"] = d1
+                row["Mức"] = s["level"]
+                row["ASM"] = s["sender"]
                 return row
             st.dataframe(
                 [_shop_row(s) for s in all_shops],
