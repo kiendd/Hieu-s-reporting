@@ -441,7 +441,7 @@ def print_asm_report(asm_data: dict,
 # Excel Export
 # ---------------------------------------------------------------------------
 
-def write_asm_excel(asm_data: dict, path: str) -> None:
+def write_asm_excel(asm_data: dict, path) -> None:
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill, Alignment
