@@ -184,62 +184,82 @@ if run:
     if not asm_msgs:
         st.warning("Không tìm thấy báo cáo ASM nào trong khoảng thời gian này.")
 
-    # ── Kết quả ───────────────────────────────────────────────────────────────
+    # ── Chuẩn bị Excel buffer ─────────────────────────────────────────────────
+    excel_buf = io.BytesIO()
+    write_asm_excel(asm_data, excel_buf)
+    excel_buf.seek(0)
+
+    # ── Header kết quả + nút download ────────────────────────────────────────
     st.divider()
+    col_hdr, col_dl = st.columns([4, 1])
+    with col_hdr:
+        st.subheader("Kết quả phân tích")
+    with col_dl:
+        st.download_button(
+            label="⬇️ Tải Excel",
+            data=excel_buf,
+            file_name=f"asm_report_{target_date}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+    # Metrics tổng quan
     col_a, col_b, col_c = st.columns(3)
     col_a.metric("Báo cáo ASM", len(asm_msgs))
     col_b.metric("Shop cọc thấp", len(asm_data["low_deposit_shops"]))
     col_c.metric("Shop cọc cao",  len(asm_data["high_deposit_shops"]))
 
-    if asm_data["low_deposit_shops"]:
-        st.subheader("🔴 Shop đặt cọc thấp")
-        for s in sorted(asm_data["low_deposit_shops"], key=lambda x: x["deposit_count"]):
-            st.markdown(f"- **{s['shop_ref']}** — {s['deposit_count']} cọc *(ASM: {s['sender']})*")
+    # ── Task 1.1: Shop đặt cọc ────────────────────────────────────────────────
+    st.subheader("🏪 Shop đặt cọc")
+    all_shops = sorted(asm_data.get("all_shops", []),
+                       key=lambda x: x["deposit_count"], reverse=True)
+    if all_shops:
+        st.dataframe(
+            [{"Shop": s["shop_ref"], "Số cọc": s["deposit_count"],
+              "Mức": s["level"], "ASM": s["sender"]} for s in all_shops],
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.caption("(không có)")
 
-    if asm_data["high_deposit_shops"]:
-        st.subheader("🟢 Shop đặt cọc cao")
-        for s in sorted(asm_data["high_deposit_shops"], key=lambda x: x["deposit_count"], reverse=True):
-            st.markdown(f"- **{s['shop_ref']}** — {s['deposit_count']} cọc *(ASM: {s['sender']})*")
+    # ── Task 1.2: Ý tưởng ASM ────────────────────────────────────────────────
+    st.subheader("💡 Ý tưởng triển khai từ ASM")
+    ideas = asm_data.get("ideas", [])
+    if ideas:
+        st.dataframe(
+            [{"ASM": i["sender"], "Shop": i["shop_ref"], "Nội dung": i["da_lam"]}
+             for i in ideas],
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.caption("(không có)")
 
-    if asm_data["ideas"]:
-        st.subheader("💡 Ý tưởng triển khai từ ASM")
-        for idea in asm_data["ideas"]:
-            with st.expander(f"{idea['sender']} — {idea['shop_ref']}"):
-                st.markdown(idea["da_lam"])
-
+    # ── Task 1.3: Điểm nổi bật ───────────────────────────────────────────────
+    st.subheader("⭐ Điểm nổi bật")
     tich_cuc = asm_data["highlights"]["tich_cuc"]
     han_che  = asm_data["highlights"]["han_che"]
-    if tich_cuc or han_che:
-        st.subheader("⭐ Điểm nổi bật")
-        if tich_cuc:
-            st.markdown("**Tích cực**")
-            for h in tich_cuc:
-                with st.expander(f"{h['sender']} — {h['shop_ref']}"):
-                    st.markdown(h["content"])
-        if han_che:
-            st.markdown("**Hạn chế**")
-            for h in han_che:
-                with st.expander(f"{h['sender']} — {h['shop_ref']}"):
-                    st.markdown(h["content"])
+    highlights = (
+        [{"ASM": h["sender"], "Shop": h["shop_ref"],
+          "Loại": "Tích cực", "Nội dung": h["content"]} for h in tich_cuc]
+        + [{"ASM": h["sender"], "Shop": h["shop_ref"],
+            "Loại": "Hạn chế", "Nội dung": h["content"]} for h in han_che]
+    )
+    if highlights:
+        st.dataframe(highlights, use_container_width=True, hide_index=True)
+    else:
+        st.caption("(không có)")
 
+    # ── Task 1.4: ASM chưa báo cáo ───────────────────────────────────────────
     missing = asm_data.get("missing_reporters")
     if missing is not None:
         st.subheader("⚠️ ASM chưa báo cáo")
         if missing:
-            for name in missing:
-                st.markdown(f"- {name}")
+            st.dataframe(
+                [{"Tên ASM": name} for name in missing],
+                use_container_width=True,
+                hide_index=True,
+            )
         else:
             st.success("Tất cả ASM đã báo cáo")
-
-    # ── Xuất Excel ────────────────────────────────────────────────────────────
-    st.divider()
-    excel_buf = io.BytesIO()
-    write_asm_excel(asm_data, excel_buf)
-    excel_buf.seek(0)
-    st.download_button(
-        label="⬇️ Tải báo cáo Excel",
-        data=excel_buf,
-        file_name=f"asm_report_{target_date}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-    )
