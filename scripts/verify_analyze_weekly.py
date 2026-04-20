@@ -122,5 +122,17 @@ r7 = analyze_weekly(MESSAGES_ATTACH, [{"displayName": "Nguyễn Văn A"}], "2026
 check("Attachment-only / empty body: not in reports", r7["reports"] == [])
 check("Attachment-only / empty body: sender in missing_list", r7["missing_list"] == ["Nguyễn Văn A"])
 
+# Qualifying among non-qualifying: below-threshold messages must NOT inflate extra_count
+MESSAGES_MIX = [
+    msg("Nguyễn Văn A", "2026-04-20T01:00:00Z", "Ok anh"),                       # VN 08:00, score 0
+    msg("Nguyễn Văn A", "2026-04-20T03:00:00Z", "a" * 400),                      # VN 10:00, score 1
+    msg("Nguyễn Văn A", "2026-04-20T07:00:00Z", REPORT_BODY),                    # VN 14:00, score 6
+]
+r_mix = analyze_weekly(MESSAGES_MIX, [{"displayName": "Nguyễn Văn A"}], "2026-04-20", deadline="20:00")
+check("Mix: 1 qualifying entry", len(r_mix["reports"]) == 1)
+check("Mix: sent_at_vn == '14:00' (only qualifying kept)", r_mix["reports"][0]["sent_at_vn"] == "14:00")
+check("Mix: text is REPORT_BODY (not 'Ok anh' or 400-char spam)", r_mix["reports"][0]["text"] == REPORT_BODY)
+check("Mix: extra_count == 0 (below-threshold filtered BEFORE counting)", r_mix["reports"][0]["extra_count"] == 0)
+
 print(f"\n{FAIL} failure(s)" if FAIL else "\nAll checks passed.")
 sys.exit(1 if FAIL else 0)
