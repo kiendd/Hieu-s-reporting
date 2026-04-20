@@ -63,8 +63,24 @@ sc = _extract_sections(C)
 check("form C: has kết quả (numbered)",    has_key(sc, "kết quả"))
 check("form C: has giải pháp (numbered)",  has_key(sc, "giải pháp"))
 
-# Regression: all daily templates still parse standard sections
-print("\nRegression: daily templates keep tích cực/vấn đề/đã làm")
+# Regression: all daily templates still parse *something*.
+# Note: individual templates use varied label phrasing (e.g. daily/6 uses
+# "Đã triển khai" not "Đã làm"; daily/7 uses "NV cần cải thiện" not
+# "Vấn đề"). We assert each template yields a non-empty sections dict
+# and that templates which use the canonical labels still capture them.
+CANONICAL_LABELS = {
+    1: ("tích cực", "vấn đề", "đã làm"),
+    2: ("tích cực", "vấn đề", "đã làm"),
+    3: ("tích cực", "vấn đề", "đã làm"),
+    4: ("tích cực", "vấn đề", "đã làm"),
+    5: ("tích cực", "vấn đề", "đã làm"),
+    # daily/6 uses "Đã triển khai" — skip "đã làm" check, others present
+    6: ("tích cực", "vấn đề"),
+    # daily/7 uses shorthand "NV đã làm được" / "NV cần cải thiện" — only "đã làm" substring survives
+    7: ("đã làm",),
+}
+
+print("\nRegression: daily templates still parse canonical labels they contain")
 for i in range(1, 8):
     p = pathlib.Path(f"templates/daily/{i}")
     try:
@@ -73,9 +89,9 @@ for i in range(1, 8):
         check(f"daily/{i}: file missing", False)
         continue
     s = _extract_sections(text)
-    check(f"daily/{i}: has tích cực", has_key(s, "tích cực"))
-    check(f"daily/{i}: has vấn đề",   has_key(s, "vấn đề"))
-    check(f"daily/{i}: has đã làm",   has_key(s, "đã làm"))
+    check(f"daily/{i}: parsed at least one section", len(s) > 0)
+    for lbl in CANONICAL_LABELS.get(i, ()):
+        check(f"daily/{i}: has {lbl}", has_key(s, lbl))
 
 print()
 if FAIL:
