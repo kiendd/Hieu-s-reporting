@@ -321,7 +321,7 @@ def _parse_vnd_amount(raw: str, unit_suffix: str | None) -> int | None:
 def _extract_sections(content: str) -> dict:
     """Trích các mục báo cáo. Hỗ trợ 3 dạng nhãn:
       - '- Label: content' (bullet)
-      - 'Label: content' (bare, bắt buộc Label viết hoa chữ cái đầu)
+      - 'Label: content' (bare, Label bắt đầu bằng chữ cái — hoa hoặc thường)
       - 'N. Label:' (numbered heading, nội dung nằm ở các bullet theo sau)
     Trả về dict { label_lower: text } gộp các dòng cho đến nhãn tiếp theo.
     """
