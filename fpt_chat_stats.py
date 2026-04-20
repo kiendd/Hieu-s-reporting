@@ -664,6 +664,66 @@ def analyze_asm_reports(parsed_reports: list,
     }
 
 
+def analyze_tttc_reports(parsed: list) -> dict:
+    """Tổng hợp các TTTC report đã parse. Mọi tỉ số chỉ tính trên non-null."""
+    def _mean(xs):
+        xs = [x for x in xs if x is not None]
+        if not xs:
+            return None
+        return sum(xs) / len(xs)
+
+    avg_tb_bill = _mean([r["tb_bill"] for r in parsed])
+    if avg_tb_bill is not None:
+        avg_tb_bill = int(round(avg_tb_bill))
+
+    avg_revenue_pct = _mean([r["revenue_pct"] for r in parsed])
+    avg_hot_pct     = _mean([r["hot_pct"]     for r in parsed])
+    avg_hot_ratio   = _mean([r["hot_ratio"]   for r in parsed])
+
+    # Nulls-last stable sort
+    def _sort_top(r):
+        v = r["revenue_pct"]
+        return (v is None, -(v or 0))
+
+    def _sort_bottom(r):
+        v = r["revenue_pct"]
+        return (v is None, (v or 0))
+
+    top    = sorted(parsed, key=_sort_top)[:5]
+    bottom = sorted(parsed, key=_sort_bottom)[:5]
+
+    ideas = [
+        {"sender": r["sender"], "venue": r["venue"], "da_lam": r["da_lam"]}
+        for r in parsed
+        if r.get("da_lam")
+    ]
+    tich_cuc = [
+        {"sender": r["sender"], "venue": r["venue"], "content": r["tich_cuc"]}
+        for r in parsed
+        if r.get("tich_cuc")
+    ]
+    han_che = [
+        {"sender": r["sender"], "venue": r["venue"], "content": r["van_de"]}
+        for r in parsed
+        if r.get("van_de")
+    ]
+
+    return {
+        "total_reports":   len(parsed),
+        "avg_tb_bill":     avg_tb_bill,
+        "avg_revenue_pct": avg_revenue_pct,
+        "avg_hot_pct":     avg_hot_pct,
+        "avg_hot_ratio":   avg_hot_ratio,
+        "top_centers":     top,
+        "bottom_centers":  bottom,
+        "ideas":           ideas,
+        "highlights": {
+            "tich_cuc": tich_cuc,
+            "han_che":  han_che,
+        },
+    }
+
+
 def check_asm_compliance(parsed_reports: list, members: list,
                          target_date_str: str, deadline_hhmm: str = "20:00",
                          skip_list: list | None = None) -> list:
