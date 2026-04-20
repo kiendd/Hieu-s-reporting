@@ -607,8 +607,16 @@ def _render_weekly_result(r: dict) -> None:
 
     wd = r["weekly_data"]
     target_date = r["target_date"]
-    short_id = r["group_id"][-8:] if len(r["group_id"]) >= 8 else r["group_id"]
+    group_id = r["group_id"]
+    short_id = group_id[-8:] if len(group_id) >= 8 else group_id
 
+    reports  = wd["reports"]
+    late     = wd["late_list"]
+    missing  = wd["missing_list"]
+    total_members = len(reports) + len(missing)
+    rate = (len(reports) / total_members * 100.0) if total_members else 0.0
+
+    # ── 1. Compliance header ──────────────────────────────────────────────────
     col_hdr, col_dl = st.columns([4, 1])
     with col_hdr:
         st.subheader(f"Báo cáo tuần — {target_date}")
@@ -619,40 +627,82 @@ def _render_weekly_result(r: dict) -> None:
             file_name=f"bao_cao_tuan_{short_id}_{target_date}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
-            key=f"dl_weekly_{r['group_id']}",
+            key=f"dl_weekly_{group_id}",
         )
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Đã báo cáo", len(wd["reports"]))
-    c2.metric("Muộn", len(wd["late_list"]))
-    c3.metric("Chưa báo cáo", len(wd["missing_list"]))
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Đã báo cáo", len(reports), delta=f"{len(reports)}/{total_members}" if total_members else None, delta_color="off")
+    m2.metric("Muộn", len(late))
+    m3.metric("Chưa báo cáo", len(missing))
+    m4.metric("Tỉ lệ báo cáo", f"{rate:.1f}%")
 
-    if wd["missing_list"]:
-        st.markdown(f"**Chưa báo cáo ({len(wd['missing_list'])}):**")
-        for n in wd["missing_list"]:
-            st.markdown(f"- {n}")
+    st.progress(
+        rate / 100.0 if total_members else 0.0,
+        text=f"{len(reports)}/{total_members} ASM đã gửi (kèm muộn)",
+    )
 
-    if wd["late_list"]:
-        st.markdown(f"**Muộn ({len(wd['late_list'])}):**")
-        late_map = {rr["sender"]: rr["sent_at_vn"] for rr in wd["reports"] if rr["is_late"]}
-        for n in wd["late_list"]:
-            st.markdown(f"- {n} ({late_map.get(n, '?')})")
+    # ── 2. Action items ───────────────────────────────────────────────────────
+    late_map = {rr["sender"]: rr["sent_at_vn"] for rr in reports if rr["is_late"]}
+    col_missing, col_late = st.columns(2)
+    with col_missing:
+        with st.container(border=True):
+            st.markdown(f"**🔴 Chưa báo cáo ({len(missing)})**")
+            if missing:
+                st.code("\n".join(f"🔴 {n}" for n in missing), language=None)
+            else:
+                st.caption("Không có — toàn bộ ASM đã báo cáo.")
+    with col_late:
+        with st.container(border=True):
+            st.markdown(f"**🟡 Muộn ({len(late)})**")
+            if late:
+                st.code(
+                    "\n".join(f"🟡 {n} ({late_map.get(n, '?')})" for n in late),
+                    language=None,
+                )
+            else:
+                st.caption("Không có — tất cả ASM đã báo cáo gửi đúng giờ.")
 
-    st.markdown("**Nội dung báo cáo:**")
-    rows = [{
-        "Người báo cáo": rr["sender"],
-        "Giờ gửi": rr["sent_at_vn"],
-        "Trạng thái": "Muộn" if rr["is_late"] else "Đúng giờ",
-        "Nội dung": rr["text"] + (f"\n\n(+{rr['extra_count']} tin nhắn khác)" if rr["extra_count"] else ""),
-    } for rr in wd["reports"]]
-    if rows:
-        st.dataframe(rows, use_container_width=True, height=400)
-    else:
-        # Render headers only when no qualifying reports
-        st.dataframe(
-            pd.DataFrame(columns=["Người báo cáo", "Giờ gửi", "Trạng thái", "Nội dung"]),
-            use_container_width=True,
-        )
+    # ── 3. Nội dung báo cáo (search + tabs + expanders) ───────────────────────
+    st.divider()
+    st.markdown("**Nội dung báo cáo**")
+    query = st.text_input(
+        "Tìm ASM…",
+        key=f"weekly_search_{group_id}",
+        placeholder="Nhập tên ASM để lọc",
+        label_visibility="collapsed",
+    )
+    q = (query or "").strip().lower()
+
+    def _match(rr: dict) -> bool:
+        return not q or q in rr["sender"].lower()
+
+    filtered_all      = [rr for rr in reports if _match(rr)]
+    filtered_on_time  = [rr for rr in filtered_all if not rr["is_late"]]
+    filtered_late     = [rr for rr in filtered_all if rr["is_late"]]
+
+    def _render_list(items: list) -> None:
+        if not items:
+            st.info("Không có báo cáo khớp.")
+            return
+        for rr in items:
+            badge  = "🟡" if rr["is_late"] else "🟢"
+            status = "Muộn" if rr["is_late"] else "Đúng giờ"
+            extra  = f" · (+{rr['extra_count']} tin nhắn khác)" if rr["extra_count"] else ""
+            header = f"{badge} {rr['sender']} — {rr['sent_at_vn']} ({status}){extra}"
+            with st.expander(header, expanded=False):
+                st.text(rr["text"])
+
+    tab_all, tab_ontime, tab_late = st.tabs([
+        f"Tất cả ({len(filtered_all)})",
+        f"Đã báo cáo đúng giờ ({len(filtered_on_time)})",
+        f"Muộn ({len(filtered_late)})",
+    ])
+    with tab_all:
+        _render_list(filtered_all)
+    with tab_ontime:
+        _render_list(filtered_on_time)
+    with tab_late:
+        _render_list(filtered_late)
 
 
 if run:
