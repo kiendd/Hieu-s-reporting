@@ -81,7 +81,7 @@ Returns:
 
 | Key | Type | Source | Null when |
 |---|---|---|---|
-| `venue` | `str \| None` | first occurrence of `(TTTC\|VX\|LC)\s*[:\-]?\s*[^\n]+` | no venue keyword |
+| `venue` | `str \| None` | first occurrence of `(TTTC\|VX\|LC)\s*[:\-]?\s*[^\n]+` **scoped to the first 3 non-empty lines** so mentions inside section bodies (e.g. "đã làm: thăm TTTC Cầu Giấy") aren't picked up | no venue keyword in header lines |
 | `revenue_pct` | `float \| None` | `(?:HT\|đạt\|về)\s*[:=]?\s*(\d[\d.,]*)\s*%` on a doanh-thu-adjacent line | absent |
 | `hot_pct` | `float \| None` | same pattern near `HOT` / `Hot` | absent |
 | `hot_ratio` | `float \| None` | `[Tt]ỉ\s*trọng.{0,15}HOT.{0,8}(\d[\d.,]*)\s*%` | absent |
@@ -179,7 +179,10 @@ fetch_all_messages → filter_by_date (VN half-open day)
 
 - **Parse failure inside `parse_tttc_report`:** individual metric regex misses → field set to `None`; whole report still returned (so its raw text still surfaces). Never raises.
 - **Empty `parsed_tttc` / `parsed_shop_vt`:** corresponding `tttc_data` / `asm_data` set to `None`; renderer skips that block.
-- **Number normalization ambiguity** (`1.625,000` vs `1,625.000`): treat `,` as decimal when it is followed by 1-2 digits and a unit suffix (`tr`, `M`, `triệu`), else treat `,` and `.` as thousand separators. If unresolvable, return `None` rather than guessing.
+- **Number normalization ambiguity.** Single helper `_parse_vnd_amount(raw, unit_suffix)`. Rules, in order:
+  1. If `unit_suffix ∈ {tr, M, triệu}`: treat `,` as decimal separator when followed by 1-2 digits (e.g. `2,2tr → 2_200_000`, `2,3M → 2_300_000`); treat `.` as decimal separator when followed by 1-2 digits (e.g. `1.625tr → 1_625_000`).
+  2. Without a unit suffix: treat both `.` and `,` as thousand separators (e.g. `134.927.000 → 134_927_000`, `1.625,000 → 1_625_000`).
+  3. If the resulting string still contains separators after normalization or has a fractional part that doesn't fit these rules: return `None` rather than guess.
 - **Classifier "unknown":** report is dropped from both structured pipelines but still present in `reports[]` and therefore in the raw-text tabs. No warning — this is expected for messages that qualify as reports but don't match either shape.
 
 ## Testing
@@ -192,6 +195,7 @@ Standalone verifier scripts under `scripts/` (no pytest in this repo — matches
    - Negatives → `unknown`
 2. `verify_parse_tttc.py` — per-template expected field matrix (from the table above). Every non-null expectation must match; null expectations must yield `None`.
 3. `verify_analyze_tttc.py` — synthetic inputs exercising: empty list, single report, mixed nulls, top/bottom ordering with nulls-last stability, average computed only over non-null values.
+3a. `verify_vnd_parsing.py` — dedicated verifier for `_parse_vnd_amount`: cases `2,2tr → 2_200_000`, `2,3M → 2_300_000`, `1.625tr → 1_625_000`, `134.927.000 → 134_927_000`, `1.625,000 → 1_625_000`, plus ambiguous inputs that must return `None`.
 4. Updated `verify_analyze_weekly.py` — adds cases for `asm_data` / `tttc_data` presence/absence and mixed weekly days.
 5. Existing `verify_weekly_classifier.py` / `verify_analyze_weekly.py` / `verify_weekly_excel.py` must still pass 100%.
 
