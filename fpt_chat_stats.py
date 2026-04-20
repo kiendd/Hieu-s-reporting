@@ -319,16 +319,48 @@ def _parse_vnd_amount(raw: str, unit_suffix: str | None) -> int | None:
 
 
 def _extract_sections(content: str) -> dict:
-    """Trích xuất các mục báo cáo theo pattern '- Label: content'."""
-    sections = {}
-    pattern = re.compile(
-        r'[-–•]\s*([^:\n]+?)\s*[:：]\s*(.*?)(?=\n\s*[-–•]|\Z)',
-        re.DOTALL,
+    """Trích các mục báo cáo. Hỗ trợ 3 dạng nhãn:
+      - '- Label: content' (bullet)
+      - 'Label: content' (bare, bắt buộc Label viết hoa chữ cái đầu)
+      - 'N. Label:' (numbered heading, nội dung nằm ở các bullet theo sau)
+    Trả về dict { label_lower: text } gộp các dòng cho đến nhãn tiếp theo.
+    """
+    # A label-start line is any of:
+    #   - optional `[-–•]` or `N.` prefix
+    #   - followed by a label (2-40 chars, starts with a letter, no ':')
+    #   - followed by ':' or '：'
+    label_re = re.compile(
+        r"""^[ \t]*                              # leading ws
+            (?:[-–•]|\d+\.)?[ \t]*               # optional bullet / number
+            (?P<label>[A-ZÀ-Ỵa-zà-ỵ][^\n:：]{1,40}?)
+            [ \t]*[:：][ \t]*                    # colon (ascii or fullwidth)
+            (?P<rest>.*)$                        # same-line content (may be empty)
+        """,
+        re.VERBOSE,
     )
-    for m in pattern.finditer(content):
-        label = m.group(1).strip().lower()
-        text = m.group(2).strip()
-        sections[label] = text
+
+    sections: dict[str, str] = {}
+    current_label: str | None = None
+    current_buf: list[str] = []
+
+    def flush():
+        nonlocal current_label, current_buf
+        if current_label is not None:
+            sections[current_label] = "\n".join(current_buf).strip()
+        current_label = None
+        current_buf = []
+
+    for line in content.splitlines():
+        m = label_re.match(line)
+        if m:
+            flush()
+            current_label = m.group("label").strip().lower()
+            rest = m.group("rest").strip()
+            current_buf = [rest] if rest else []
+        else:
+            if current_label is not None:
+                current_buf.append(line)
+    flush()
     return sections
 
 
