@@ -255,6 +255,29 @@ def _score_weekly_message(content: str) -> int:
     return sum(1 for f in flags if f)
 
 
+_CLASSIFY_RE_COC = re.compile(r"\d+\s*cọc|cọc\s*\d+(?!\s*đ)", re.IGNORECASE)
+_CLASSIFY_RE_TTTC = re.compile(
+    r"\bTTTC\b|TB\s*[Bb]ill|%\s*HT|doanh\s*thu",
+    re.IGNORECASE,
+)
+
+
+def classify_report(content: str) -> str:
+    """Phân loại loại báo cáo: 'shop_vt' | 'tttc' | 'unknown'.
+
+    Dấu hiệu Shop VT mạnh nhất là "N cọc" — có thì trả shop_vt luôn.
+    Nếu không có cọc nhưng có dấu hiệu TTTC (TTTC / TB bill / %HT / doanh thu)
+    thì là tttc. Còn lại → unknown.
+    """
+    if not content:
+        return "unknown"
+    if _CLASSIFY_RE_COC.search(content):
+        return "shop_vt"
+    if _CLASSIFY_RE_TTTC.search(content):
+        return "tttc"
+    return "unknown"
+
+
 # ---------------------------------------------------------------------------
 # ASM Report Analysis
 # ---------------------------------------------------------------------------
