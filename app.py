@@ -550,14 +550,14 @@ def _render_result(r: dict) -> None:
         else:
             st.success("Tất cả đã báo cáo")
 
-    _render_shop_vt_sections(asm_data, d1_shop_map=d1_shop_map)
-
     if late_reporters:
         st.subheader("🕐 ASM báo cáo muộn")
         st.dataframe(
             [{"ASM": lr["sender"], "Giờ gửi": lr["sent_at_vn"]} for lr in late_reporters],
             use_container_width=True, hide_index=True,
         )
+
+    _render_shop_vt_sections(asm_data, d1_shop_map=d1_shop_map)
 
     missing = asm_data.get("missing_reporters")
     if missing is not None and r.get("past_deadline"):
