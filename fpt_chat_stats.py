@@ -583,6 +583,72 @@ def analyze_multiday(parsed_reports: list, date_from_str: str, date_to_str: str)
     }
 
 
+def analyze_weekly(messages: list,
+                   group_members: list,
+                   target_date_vn: str,
+                   deadline: str = "20:00") -> dict:
+    """Báo cáo tuần một ngày: phân loại tin nhắn, tìm muộn/thiếu, dump text."""
+    VN_OFFSET = 7 * 3600
+    target = datetime.strptime(target_date_vn, "%Y-%m-%d").date()
+    dl_h, dl_m = [int(x) for x in deadline.split(":", 1)]
+    deadline_time = time(hour=dl_h, minute=dl_m)
+
+    member_names = sorted({
+        (m.get("displayName") or "").strip()
+        for m in group_members
+        if (m.get("displayName") or "").strip()
+    })
+    member_set = set(member_names)
+
+    # Group qualifying messages by sender
+    by_sender: dict[str, list] = {}
+    for msg in messages:
+        if msg.get("type") != "TEXT":
+            continue
+        content = msg.get("content") or ""
+        if not content.strip():
+            continue
+        user = msg.get("user") or {}
+        sender = (user.get("displayName") or "").strip()
+        if sender not in member_set:
+            continue
+        dt = parse_dt(msg.get("createdAt", ""))
+        if not dt:
+            continue
+        vn_dt = datetime.fromtimestamp(dt.timestamp() + VN_OFFSET, tz=timezone.utc)
+        if vn_dt.date() != target:
+            continue
+        if _score_weekly_message(content) < WEEKLY_SCORE_THRESHOLD:
+            continue
+        by_sender.setdefault(sender, []).append((dt, vn_dt, content))
+
+    reports = []
+    for sender, items in by_sender.items():
+        items.sort(key=lambda t: t[0])
+        _, vn_dt, content = items[0]
+        is_late = vn_dt.time() >= deadline_time
+        reports.append({
+            "sender": sender,
+            "sent_at_vn": vn_dt.strftime("%H:%M"),
+            "is_late": is_late,
+            "text": content,
+            "extra_count": len(items) - 1,
+        })
+    reports.sort(key=lambda r: r["sent_at_vn"])
+
+    late_list = sorted(r["sender"] for r in reports if r["is_late"])
+    reporters = {r["sender"] for r in reports}
+    missing_list = sorted(n for n in member_names if n not in reporters)
+
+    return {
+        "target_date":  target_date_vn,
+        "deadline":     deadline,
+        "reports":      reports,
+        "late_list":    late_list,
+        "missing_list": missing_list,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Report Output
 # ---------------------------------------------------------------------------
