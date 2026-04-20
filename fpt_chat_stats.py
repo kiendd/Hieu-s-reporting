@@ -215,6 +215,47 @@ def fetch_all_messages(token: str, group_id: str,
 
 
 # ---------------------------------------------------------------------------
+# Weekly Report Classifier
+# ---------------------------------------------------------------------------
+
+WEEKLY_SCORE_THRESHOLD = 3
+WEEKLY_MIN_LENGTH = 150
+
+_WEEKLY_RE_UNIT = re.compile(
+    r"\b(tttc|vx\s|shop\b|trung\s*tâm|chi\s*nhánh|lc\s+hcm)",
+    re.IGNORECASE,
+)
+_WEEKLY_RE_METRIC = re.compile(
+    r"\d+\s*%|\d+(?:\.\d+)?\s*(tr|triệu|m\b|k\b|đ\b|cọc|bill|khách|lượt|gói)",
+    re.IGNORECASE,
+)
+_WEEKLY_RE_OPEN_CLOSE = re.compile(
+    r"(đánh\s*giá|báo\s*cáo|em\s+(?:xin\s+)?cảm\s*ơn|dạ\s+em\s+(?:gửi|bc))",
+    re.IGNORECASE,
+)
+_WEEKLY_RE_SECTION = re.compile(
+    r"(?m)^\s*[-–•\d\.]*\s*(kết\s*quả|tích\s*cực|vấn\s*đề|đã\s*làm|ngày\s*mai"
+    r"|giải\s*pháp|hành\s*động|tổng\s*quan|phân\s*tích)\s*[:：]",
+    re.IGNORECASE,
+)
+
+
+def _score_weekly_message(content: str) -> int:
+    """Tính điểm phân loại báo cáo tuần (0..6) cho một đoạn text."""
+    if not content:
+        return 0
+    flags = (
+        len(content.strip()) >= WEEKLY_MIN_LENGTH,
+        "\n" in content,
+        bool(_WEEKLY_RE_UNIT.search(content)),
+        bool(_WEEKLY_RE_METRIC.search(content)),
+        bool(_WEEKLY_RE_OPEN_CLOSE.search(content)),
+        bool(_WEEKLY_RE_SECTION.search(content)),
+    )
+    return sum(1 for f in flags if f)
+
+
+# ---------------------------------------------------------------------------
 # ASM Report Analysis
 # ---------------------------------------------------------------------------
 
