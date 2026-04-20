@@ -1000,6 +1000,8 @@ Ví dụ:
                         help="Ngưỡng đặt cọc cao — shop có deposit > N (mặc định: 5)")
     parser.add_argument("--asm-deadline", default="20:00", metavar="HH:MM",
                         help="Deadline báo cáo hàng ngày (mặc định: 20:00, giờ VN)")
+    parser.add_argument("--weekly", default=None, metavar="YYYY-MM-DD",
+                        help="Báo cáo tuần một ngày: liệt kê ai đã/muộn/chưa báo cáo + dump text.")
     parser.add_argument("--date", default=None, metavar="YYYY-MM-DD",
                         help="Ngày kiểm tra compliance (mặc định: hôm nay giờ VN)")
     parser.add_argument("--skip-reporters", default="", metavar="NAMES",
@@ -1007,12 +1009,16 @@ Ví dụ:
 
     args = parser.parse_args()
 
+    if args.weekly and (args.today or args.date_from or args.date_to or args.date):
+        print("Error: --weekly không dùng chung với --today / --from / --to / --date.", file=sys.stderr)
+        sys.exit(2)
+
     token   = args.token   or cfg.get("token")
     group   = args.group   or cfg.get("group")
     api_url = args.api_url or cfg.get("api_url", "https://api-chat.fpt.com")
 
-    # ── Validate (chỉ khi cần gọi API)
-    if not args.load:
+    # ── Validate (chỉ khi cần gọi API; --weekly tự kiểm tra bên trong)
+    if not args.load and not args.weekly:
         if not token:
             print("Error: --token là bắt buộc (hoặc set 'token' trong config.json)", file=sys.stderr)
             sys.exit(1)
@@ -1032,6 +1038,72 @@ Ví dụ:
         args.date_from = _vn_today
         args.date_to   = _vn_today
         args.date      = _vn_today
+
+    # ── --weekly shortcut (báo cáo tuần một ngày)
+    if args.weekly:
+        try:
+            target_vn = datetime.strptime(args.weekly, "%Y-%m-%d").date()
+        except ValueError:
+            print(f"Error: --weekly giá trị không hợp lệ: {args.weekly}", file=sys.stderr)
+            sys.exit(2)
+
+        # Half-open VN-day window: [target 00:00+07, target+1 00:00+07)
+        vn_start_utc = datetime.combine(target_vn, time(0, 0), tzinfo=timezone.utc) - timedelta(hours=7)
+        vn_end_utc   = vn_start_utc + timedelta(days=1)
+
+        # Fetch or load raw messages
+        if args.load:
+            print(f"[*] Loading từ file: {args.load}", file=sys.stderr)
+            with open(args.load, encoding="utf-8") as f:
+                messages = json.load(f)
+            print(f"[✓] Loaded {len(messages)} messages", file=sys.stderr)
+        else:
+            if not token:
+                print("Error: --weekly cần --token (hoặc config.json).", file=sys.stderr)
+                sys.exit(1)
+            if not group:
+                print("Error: --weekly cần --group (hoặc config.json).", file=sys.stderr)
+                sys.exit(1)
+            group_id = extract_group_id(group)
+            messages = fetch_all_messages(
+                token=token, group_id=group_id, base_url=api_url,
+                limit=args.limit, date_from=vn_start_utc,
+            )
+
+        if args.save:
+            with open(args.save, "w", encoding="utf-8") as f:
+                json.dump(messages, f, ensure_ascii=False, indent=2)
+            print(f"[✓] Đã lưu raw messages → {args.save}", file=sys.stderr)
+
+        # Clip to the half-open window. filter_by_date uses inclusive date_to,
+        # so subtract 1 microsecond to emulate half-open [start, end).
+        messages = filter_by_date(
+            messages, vn_start_utc, vn_end_utc - timedelta(microseconds=1),
+        )
+
+        # Members are REQUIRED for the missing list.
+        if not token or not group:
+            print(
+                "Error: --weekly cần token+group để lấy thành viên group cho compliance check.",
+                file=sys.stderr,
+            )
+            sys.exit(3)
+        _session = build_session(token)
+        members = fetch_group_members(_session, api_url, extract_group_id(group))
+        if not members:
+            print(
+                "Error: fetch_group_members trả rỗng hoặc lỗi — hủy báo cáo tuần.",
+                file=sys.stderr,
+            )
+            sys.exit(3)
+
+        deadline = cfg.get("deadline", "20:00")
+        data = analyze_weekly(messages, members, args.weekly, deadline=deadline)
+        print_weekly_report(data)
+        if args.excel:
+            write_weekly_excel(data, members, args.excel)
+            print(f"[✓] Đã xuất Excel → {args.excel}", file=sys.stderr)
+        return
 
     # ── Skip reporters: merge config + CLI
     skip_list = list(cfg.get("asm_skip_reporters", []))
