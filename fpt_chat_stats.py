@@ -689,11 +689,13 @@ def analyze_tttc_reports(parsed: list) -> dict:
         v = r["revenue_pct"]
         return (v is None, (v or 0))
 
-    top    = sorted(parsed, key=_sort_top)[:5]
-    bottom = sorted(parsed, key=_sort_bottom)[:5]
+    # Shallow-copy so downstream mutation doesn't alias back into parsed_tttc.
+    top    = [{**r} for r in sorted(parsed, key=_sort_top)[:5]]
+    bottom = [{**r} for r in sorted(parsed, key=_sort_bottom)[:5]]
 
     ideas = [
-        {"sender": r["sender"], "venue": r["venue"], "da_lam": r["da_lam"]}
+        {"sender": r["sender"], "venue": r["venue"],
+         "da_lam": r["da_lam"], "sent_at": r.get("sent_at", "")}
         for r in parsed
         if r.get("da_lam")
     ]
