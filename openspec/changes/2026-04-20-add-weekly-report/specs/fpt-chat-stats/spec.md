@@ -3,14 +3,26 @@
 ### Requirement: Weekly Report Analysis Function
 `fpt_chat_stats` SHALL expose an `analyze_weekly(messages, group_members, target_date_vn, deadline)` function that produces a single-day compliance-and-content view, independent of the daily shop-report parser.
 
-A message qualifies as "a weekly report sent" when ALL of the following hold:
+A message qualifies as "a weekly report sent" when ALL of the following **hard gates** hold:
 - `type == "TEXT"`
-- message body (`content` field) is at least `150` characters after whitespace strip (the length threshold)
-- message body contains at least one of the following keywords, case-insensitive, matched as substring: `Đánh giá`, `báo cáo`, `shop`, `TTTC`, `VX`, `trung tâm`, `Kết quả`, `cọc`
+- message body (`content` field) is non-empty after whitespace strip
 - sender's `displayName` is present in `group_members`
 - the message's VN-time date (UTC+7) equals `target_date_vn`
 
-The length threshold (`150`) and keyword list SHALL be defined as module-level constants in `fpt_chat_stats.py` (e.g. `WEEKLY_MIN_LENGTH`, `WEEKLY_KEYWORDS`) so they can be tuned in one place. Configurability via CLI or config file is OUT OF SCOPE for this change.
+AND the message's body achieves **score ≥ `WEEKLY_SCORE_THRESHOLD`** (default `3`) under the six-feature scoring function defined below. The scoring function distinguishes real weekly reports from casual chat based on structural and lexical features observed across `templates/weekend/1..8`.
+
+**Feature scoring (one point per feature, 0–6):**
+
+| # | Feature            | Matcher (case-insensitive; `\b` = word boundary) |
+|---|--------------------|--------------------------------------------------|
+| A | Length             | `len(content.strip()) >= WEEKLY_MIN_LENGTH` (default `150`) |
+| B | Multi-line         | `"\n" in content` |
+| C | Business unit      | matches `\b(tttc\|vx\s\|shop\b\|trung\s*tâm\|chi\s*nhánh\|lc\s+hcm)` |
+| D | Numeric metric     | matches `\d+\s*%\|\d+(\.\d+)?\s*(tr\|triệu\|m\b\|k\b\|đ\b\|cọc\|bill\|khách\|lượt\|gói)` |
+| E | Report opener/closer | matches `(đánh\s*giá\|báo\s*cáo\|em\s+(xin\s+)?cảm\s*ơn\|dạ\s+em\s+(gửi\|bc))` |
+| F | Section label      | matches `(^\|\n)\s*[-–•\d\.]*\s*(kết\s*quả\|tích\s*cực\|vấn\s*đề\|đã\s*làm\|ngày\s*mai\|giải\s*pháp\|hành\s*động\|tổng\s*quan\|phân\s*tích)\s*[:：]` (line-anchored; uses `re.MULTILINE`) |
+
+`WEEKLY_SCORE_THRESHOLD`, `WEEKLY_MIN_LENGTH`, and the six compiled feature regexes SHALL be module-level constants in `fpt_chat_stats.py` so the thresholds and vocabulary can be tuned in one place. The scoring function SHALL be exposed as `_score_weekly_message(content: str) -> int` and SHALL be a pure function of `content` (no external state). Configurability via CLI or config file is OUT OF SCOPE for this change.
 
 The returned dict SHALL contain:
 - `target_date` (str, `YYYY-MM-DD`)
@@ -41,25 +53,35 @@ The function SHALL NOT invoke `detect_asm_reports`, `parse_asm_report`, or `anal
 - **WHEN** `analyze_weekly` runs
 - **THEN** C appears in `missing_list`, not in `reports`
 
-#### Scenario: Short acknowledgment ignored (length threshold)
-- **GIVEN** sender E sends one TEXT message "Ok anh" (length < 150) on `target_date_vn` and nothing else
+#### Scenario: Short acknowledgment ignored (score too low)
+- **GIVEN** sender E sends one TEXT message "Ok anh" on `target_date_vn` and nothing else
 - **WHEN** `analyze_weekly` runs
-- **THEN** E appears in `missing_list`, not in `reports` — short messages do not qualify as reports
+- **THEN** E's message scores 0 (fails every feature), is below threshold, and E appears in `missing_list`
 
-#### Scenario: Long message without report keyword ignored
-- **GIVEN** sender F sends one TEXT message of 400 characters on `target_date_vn` that contains none of the keywords `Đánh giá / báo cáo / shop / TTTC / VX / trung tâm / Kết quả / cọc`
+#### Scenario: Long off-topic message ignored (score too low)
+- **GIVEN** sender F sends one TEXT message of 400 characters on `target_date_vn` with multiple lines but no business-unit reference, no metric, no report opener/closer phrase, and no section label
 - **WHEN** `analyze_weekly` runs
-- **THEN** F appears in `missing_list`, not in `reports`
+- **THEN** F's message scores 2 (features A and B only), is below threshold, and F appears in `missing_list`
 
-#### Scenario: Keyword match is case-insensitive and substring-based
-- **GIVEN** sender G sends a qualifying-length message whose body contains `"TTTC"` or `"trung tâm"` or `"Đánh Giá"` (mixed case) with no other keywords
+#### Scenario: All feature matching is case-insensitive with word boundaries
+- **GIVEN** sender G sends a message containing `"TTTC"`, `"trung tâm"`, and `"Đánh Giá"` in mixed case
 - **WHEN** `analyze_weekly` runs
-- **THEN** G's message qualifies; G appears in `reports`
+- **THEN** the business-unit and opener/closer features match regardless of case. A token embedded inside another word (e.g. `"shopping"` inside a narrative) SHALL NOT trigger feature C because the regex uses word boundaries.
+
+#### Scenario: Narrative report without section labels qualifies
+- **GIVEN** sender I sends a 900-character multi-line message that references `TTTC`, contains `Doanh thu 133%` and `Em cảm ơn ạ`, but uses only `-` bullet lines with no `Kết quả:` / `Tích cực:` / `Đã làm:` style section labels (shape similar to `templates/weekend/4` and `templates/weekend/6`)
+- **WHEN** `analyze_weekly` runs
+- **THEN** the message scores 5 (A + B + C + D + E; F fails) which is ≥ threshold, and I appears in `reports`
+
+#### Scenario: Score threshold is exactly met
+- **GIVEN** sender J sends a 200-character multi-line message that mentions `TTTC` but has no metric, no opener/closer phrase, and no section label
+- **WHEN** `analyze_weekly` runs
+- **THEN** the message scores exactly 3 (A + B + C) which meets the threshold, and J appears in `reports`
 
 #### Scenario: Qualifying message among multiple non-qualifying messages
-- **GIVEN** sender H sends three TEXT messages on `target_date_vn`: (1) "Ok anh" at 08:00, (2) a 400-char message with no keywords at 10:00, (3) a full 800-char report containing `Đánh giá` at 14:00
+- **GIVEN** sender H sends three TEXT messages on `target_date_vn`: (1) "Ok anh" at 08:00 (score 0), (2) a 400-char off-topic message at 10:00 (score 2), (3) a full 800-char report matching every feature at 14:00 (score 6)
 - **WHEN** `analyze_weekly` runs
-- **THEN** H's `reports` entry has `sent_at_vn = 14:00`, `text` equal to message (3), and `extra_count = 0` (only message 3 qualifies; 1 and 2 are filtered before counting extras)
+- **THEN** H's `reports` entry has `sent_at_vn = 14:00`, `text` equal to message (3), and `extra_count = 0` (only message 3 qualifies; 1 and 2 are below threshold and therefore not counted toward `extra_count`)
 
 #### Scenario: Sender not in group_members ignored
 - **GIVEN** a TEXT message from an account whose `displayName` is not in `group_members`

@@ -9,10 +9,23 @@
   - `late_list` (list of sender displayNames, sorted alphabetically)
   - `missing_list` (list of sender displayNames, sorted alphabetically)
 - [ ] 2. Define module-level constants in `fpt_chat_stats.py`:
+  - `WEEKLY_SCORE_THRESHOLD = 3`
   - `WEEKLY_MIN_LENGTH = 150`
-  - `WEEKLY_KEYWORDS = ("đánh giá", "báo cáo", "shop", "tttc", "vx", "trung tâm", "kết quả", "cọc")` (store lowercase; apply `content.lower()` when matching)
-- [ ] 3. A message qualifies as a weekly report when ALL of: `msg["type"] == "TEXT"`, `len(msg["content"].strip()) >= WEEKLY_MIN_LENGTH`, `content.lower()` contains at least one element of `WEEKLY_KEYWORDS`, sender `displayName` in `group_members`, and VN-time date of `createdAt` equals `target_date_vn`. Do not call `detect_asm_reports` / `parse_asm_report`.
-- [ ] 4. Multiple qualifying messages per sender → keep earliest (by `createdAt` UTC), set `extra_count = N_qualifying - 1`. Non-qualifying messages do not increment `extra_count`.
+  - Six compiled feature regexes (all `re.IGNORECASE`; F uses `re.MULTILINE` for line anchoring):
+    - `_WEEKLY_RE_UNIT = re.compile(r"\b(tttc|vx\s|shop\b|trung\s*tâm|chi\s*nhánh|lc\s+hcm)", re.IGNORECASE)`
+    - `_WEEKLY_RE_METRIC = re.compile(r"\d+\s*%|\d+(?:\.\d+)?\s*(tr|triệu|m\b|k\b|đ\b|cọc|bill|khách|lượt|gói)", re.IGNORECASE)`
+    - `_WEEKLY_RE_OPEN_CLOSE = re.compile(r"(đánh\s*giá|báo\s*cáo|em\s+(?:xin\s+)?cảm\s*ơn|dạ\s+em\s+(?:gửi|bc))", re.IGNORECASE)`
+    - `_WEEKLY_RE_SECTION = re.compile(r"(?m)^\s*[-–•\d\.]*\s*(kết\s*quả|tích\s*cực|vấn\s*đề|đã\s*làm|ngày\s*mai|giải\s*pháp|hành\s*động|tổng\s*quan|phân\s*tích)\s*[:：]", re.IGNORECASE)`
+- [ ] 3. Add `_score_weekly_message(content: str) -> int` that returns an integer in `[0, 6]` by counting:
+  - (A) `len(content.strip()) >= WEEKLY_MIN_LENGTH`
+  - (B) `"\n" in content`
+  - (C) `_WEEKLY_RE_UNIT.search(content)` truthy
+  - (D) `_WEEKLY_RE_METRIC.search(content)` truthy
+  - (E) `_WEEKLY_RE_OPEN_CLOSE.search(content)` truthy
+  - (F) `_WEEKLY_RE_SECTION.search(content)` truthy
+  The function SHALL be a pure function of `content` (no external state, no I/O). Place alongside `detect_asm_reports` near `fpt_chat_stats.py:220`.
+- [ ] 3b. A message qualifies as a weekly report when ALL hard gates hold AND `_score_weekly_message(content) >= WEEKLY_SCORE_THRESHOLD`. Hard gates: `msg["type"] == "TEXT"`, `msg["content"].strip()` non-empty, sender `displayName` in `group_members`, VN-time date of `createdAt` equals `target_date_vn`. Do not call `detect_asm_reports` / `parse_asm_report`.
+- [ ] 4. Multiple qualifying messages per sender → keep earliest (by `createdAt` UTC), set `extra_count = N_qualifying - 1`. Messages below the score threshold are filtered before counting and do NOT increment `extra_count`.
 - [ ] 5. `is_late` is true iff `sent_at_vn.time() >= parsed(deadline)` on `target_date_vn`.
 - [ ] 6. New `print_weekly_report(data)` writing to stdout with sections: header (date, deadline, counts), Chưa báo cáo, Muộn, Nội dung báo cáo.
 - [ ] 7. New `write_weekly_excel(data, group_members, path)` producing two sheets:
@@ -38,3 +51,4 @@
 - [ ] 14. Update `openspec/specs/fpt-chat-stats/spec.md` and `openspec/specs/web-ui/spec.md` with the ADDED requirements from this change's spec deltas.
 - [ ] 15. Validate with `openspec validate 2026-04-20-add-weekly-report --strict --no-interactive`.
 - [ ] 16. Manual test: `--save raw.json` on a real weekend day, then `--load raw.json --weekly <that-day>` and verify late/missing lists match expected reality; verify content column shows full raw text; verify short acknowledgments in the group chat are NOT counted as reports.
+- [ ] 17. Classifier sanity check (REPL or small scratch script): for each file in `templates/weekend/1..8`, assert `_score_weekly_message(content) >= WEEKLY_SCORE_THRESHOLD`. Expected minimum score across the 8 samples is 5 (samples 4 and 6) and max is 6. Any drop below 5 indicates a regression in the feature regexes.
