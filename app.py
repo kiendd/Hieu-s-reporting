@@ -616,6 +616,21 @@ def _render_weekly_result(r: dict) -> None:
     total_members = len(reports) + len(missing)
     rate = (len(reports) / total_members * 100.0) if total_members else 0.0
 
+    # Avatar lookup keyed by displayName. Try a few common field names since the
+    # FPT Chat members endpoint shape isn't fully documented.
+    def _avatar_of(member: dict) -> str:
+        for key in ("avatarUrl", "avatar", "imageUrl", "photoUrl"):
+            v = member.get(key)
+            if isinstance(v, str) and v.startswith("http"):
+                return v
+        return ""
+
+    avatar_map: dict[str, str] = {
+        (m.get("displayName") or "").strip(): _avatar_of(m)
+        for m in (r.get("members") or [])
+        if (m.get("displayName") or "").strip()
+    }
+
     # ── 1. Compliance header ──────────────────────────────────────────────────
     col_hdr, col_dl = st.columns([4, 1])
     with col_hdr:
@@ -689,8 +704,22 @@ def _render_weekly_result(r: dict) -> None:
             status = "Muộn" if rr["is_late"] else "Đúng giờ"
             extra  = f" · (+{rr['extra_count']} tin nhắn khác)" if rr["extra_count"] else ""
             header = f"{badge} {rr['sender']} — {rr['sent_at_vn']} ({status}){extra}"
-            with st.expander(header, expanded=False):
-                st.text(rr["text"])
+            url = avatar_map.get(rr["sender"], "")
+            col_av, col_body = st.columns([1, 12], vertical_alignment="center")
+            with col_av:
+                if url:
+                    st.image(url, width=40)
+                else:
+                    st.markdown(
+                        f"<div style='width:40px;height:40px;border-radius:50%;"
+                        f"background:#e3e3e3;display:flex;align-items:center;"
+                        f"justify-content:center;font-weight:600;color:#555;'>"
+                        f"{(rr['sender'][:1] or '?').upper()}</div>",
+                        unsafe_allow_html=True,
+                    )
+            with col_body:
+                with st.expander(header, expanded=False):
+                    st.text(rr["text"])
 
     tab_all, tab_ontime, tab_late = st.tabs([
         f"Tất cả ({len(filtered_all)})",
@@ -770,6 +799,7 @@ if run:
                         "group_id": group_id,
                         "target_date": weekly_target_str,
                         "weekly_data": weekly_data,
+                        "members": members,
                         "excel_buf": excel_buf,
                         "error": None,
                     })
