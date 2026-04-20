@@ -335,6 +335,104 @@ run = st.button(
     use_container_width=True,
 )
 
+def _render_shop_vt_sections(asm_data: dict, d1_shop_map: dict | None = None) -> None:
+    """Render the shop-deposit chart + shop-bucket tables + ideas + highlights.
+
+    Shared by daily (_render_result) and weekly (_render_weekly_result).
+    d1_shop_map is daily-only (D-1 delta comparison); None for weekly.
+    """
+    import pandas as pd  # local import keeps helper self-contained
+
+    # Chart: cọc theo shop
+    all_shops_raw = sorted(asm_data.get("all_shops", []),
+                           key=lambda x: x["deposit_count"], reverse=True)
+    if all_shops_raw:
+        labels = [s["shop_ref"][:28] for s in all_shops_raw]
+        chart_dict = {"Hôm nay": [s["deposit_count"] for s in all_shops_raw]}
+        if d1_shop_map is not None:
+            chart_dict["D-1"] = [d1_shop_map.get(s["shop_ref"], 0) for s in all_shops_raw]
+        st.bar_chart(pd.DataFrame(chart_dict, index=labels), use_container_width=True)
+
+    no_dep = asm_data.get("no_deposit_shops", [])
+    if no_dep:
+        st.subheader("🚫 Shop báo cáo 0 cọc")
+        st.dataframe(
+            [{"ASM": s["sender"], "Shop": s["shop_ref"]} for s in no_dep],
+            use_container_width=True, hide_index=True,
+        )
+
+    low_shops = asm_data.get("low_deposit_shops", [])
+    if low_shops:
+        st.subheader("📉 Shop cọc thấp")
+        def _low_row(s):
+            d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
+            row = {"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
+            if d1 is not None:
+                row["Cọc D-1"] = d1
+            return row
+        st.dataframe(
+            [_low_row(s) for s in sorted(low_shops, key=lambda x: x["deposit_count"])],
+            use_container_width=True, hide_index=True,
+        )
+
+    high_shops = asm_data.get("high_deposit_shops", [])
+    if high_shops:
+        st.subheader("🏆 Nhân viên phát sinh cọc tốt")
+        def _high_row(s):
+            d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
+            row = {"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
+            if d1 is not None:
+                row["Cọc D-1"] = d1
+            return row
+        st.dataframe(
+            [_high_row(s) for s in sorted(high_shops, key=lambda x: x["deposit_count"], reverse=True)],
+            use_container_width=True, hide_index=True,
+        )
+
+    st.subheader("🏪 Shop đặt cọc")
+    all_shops = sorted(asm_data.get("all_shops", []),
+                       key=lambda x: x["deposit_count"], reverse=True)
+    if all_shops:
+        def _shop_row(s):
+            d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
+            row = {"Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
+            if d1 is not None:
+                row["Cọc D-1"] = d1
+            row["Mức"] = s["level"]
+            row["ASM"] = s["sender"]
+            return row
+        st.dataframe(
+            [_shop_row(s) for s in all_shops],
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        st.caption("(không có)")
+
+    st.subheader("💡 Ý tưởng triển khai từ ASM")
+    ideas = asm_data.get("ideas", [])
+    if ideas:
+        st.table(
+            [{"ASM": i["sender"], "Shop": i["shop_ref"], "Nội dung": i["da_lam"]}
+             for i in ideas]
+        )
+    else:
+        st.caption("(không có)")
+
+    st.subheader("⭐ Điểm nổi bật")
+    tich_cuc = asm_data["highlights"]["tich_cuc"]
+    han_che  = asm_data["highlights"]["han_che"]
+    highlights = (
+        [{"ASM": h["sender"], "Shop": h["shop_ref"], "Loại": "Tích cực", "Nội dung": h["content"]}
+         for h in tich_cuc]
+        + [{"ASM": h["sender"], "Shop": h["shop_ref"], "Loại": "Hạn chế", "Nội dung": h["content"]}
+           for h in han_che]
+    )
+    if highlights:
+        st.table(highlights)
+    else:
+        st.caption("(không có)")
+
+
 def _render_result(r: dict) -> None:
     if r.get("error"):
         st.error(f"Lỗi: {r['error']}")
@@ -442,15 +540,6 @@ def _render_result(r: dict) -> None:
             )
         st.divider()
 
-    # ── Chart: cọc theo shop ───────────────────────────────────────────────
-    all_shops_raw = sorted(asm_data.get("all_shops", []), key=lambda x: x["deposit_count"], reverse=True)
-    if all_shops_raw:
-        labels = [s["shop_ref"][:28] for s in all_shops_raw]
-        chart_dict = {"Hôm nay": [s["deposit_count"] for s in all_shops_raw]}
-        if d1_shop_map is not None:
-            chart_dict["D-1"] = [d1_shop_map.get(s["shop_ref"], 0) for s in all_shops_raw]
-        st.bar_chart(pd.DataFrame(chart_dict, index=labels), use_container_width=True)
-
     if unreported_now is not None:
         st.subheader("⏳ Chưa báo cáo đến hiện tại")
         if unreported_now:
@@ -461,41 +550,7 @@ def _render_result(r: dict) -> None:
         else:
             st.success("Tất cả đã báo cáo")
 
-    no_dep = asm_data.get("no_deposit_shops", [])
-    if no_dep:
-        st.subheader("🚫 Shop báo cáo 0 cọc")
-        st.dataframe(
-            [{"ASM": s["sender"], "Shop": s["shop_ref"]} for s in no_dep],
-            use_container_width=True, hide_index=True,
-        )
-
-    low_shops = asm_data.get("low_deposit_shops", [])
-    if low_shops:
-        st.subheader("📉 Shop cọc thấp")
-        def _low_row(s):
-            d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
-            row = {"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
-            if d1 is not None:
-                row["Cọc D-1"] = d1
-            return row
-        st.dataframe(
-            [_low_row(s) for s in sorted(low_shops, key=lambda x: x["deposit_count"])],
-            use_container_width=True, hide_index=True,
-        )
-
-    high_shops = asm_data.get("high_deposit_shops", [])
-    if high_shops:
-        st.subheader("🏆 Nhân viên phát sinh cọc tốt")
-        def _high_row(s):
-            d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
-            row = {"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
-            if d1 is not None:
-                row["Cọc D-1"] = d1
-            return row
-        st.dataframe(
-            [_high_row(s) for s in sorted(high_shops, key=lambda x: x["deposit_count"], reverse=True)],
-            use_container_width=True, hide_index=True,
-        )
+    _render_shop_vt_sections(asm_data, d1_shop_map=d1_shop_map)
 
     if late_reporters:
         st.subheader("🕐 ASM báo cáo muộn")
@@ -503,48 +558,6 @@ def _render_result(r: dict) -> None:
             [{"ASM": lr["sender"], "Giờ gửi": lr["sent_at_vn"]} for lr in late_reporters],
             use_container_width=True, hide_index=True,
         )
-
-    st.subheader("🏪 Shop đặt cọc")
-    all_shops = sorted(asm_data.get("all_shops", []), key=lambda x: x["deposit_count"], reverse=True)
-    if all_shops:
-        def _shop_row(s):
-            d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
-            row = {"Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
-            if d1 is not None:
-                row["Cọc D-1"] = d1
-            row["Mức"] = s["level"]
-            row["ASM"] = s["sender"]
-            return row
-        st.dataframe(
-            [_shop_row(s) for s in all_shops],
-            use_container_width=True, hide_index=True,
-        )
-    else:
-        st.caption("(không có)")
-
-    st.subheader("💡 Ý tưởng triển khai từ ASM")
-    ideas = asm_data.get("ideas", [])
-    if ideas:
-        st.table(
-            [{"ASM": i["sender"], "Shop": i["shop_ref"], "Nội dung": i["da_lam"]}
-             for i in ideas]
-        )
-    else:
-        st.caption("(không có)")
-
-    st.subheader("⭐ Điểm nổi bật")
-    tich_cuc = asm_data["highlights"]["tich_cuc"]
-    han_che  = asm_data["highlights"]["han_che"]
-    highlights = (
-        [{"ASM": h["sender"], "Shop": h["shop_ref"], "Loại": "Tích cực", "Nội dung": h["content"]}
-         for h in tich_cuc]
-        + [{"ASM": h["sender"], "Shop": h["shop_ref"], "Loại": "Hạn chế", "Nội dung": h["content"]}
-           for h in han_che]
-    )
-    if highlights:
-        st.table(highlights)
-    else:
-        st.caption("(không có)")
 
     missing = asm_data.get("missing_reporters")
     if missing is not None and r.get("past_deadline"):
