@@ -6,7 +6,7 @@ Chạy: streamlit run app.py
 import io
 import json
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 import pandas as pd
 import streamlit as st
@@ -638,15 +638,21 @@ def _render_weekly_result(r: dict) -> None:
         for n in wd["late_list"]:
             st.markdown(f"- {n} ({late_map.get(n, '?')})")
 
-    if wd["reports"]:
-        st.markdown("**Nội dung báo cáo:**")
-        rows = [{
-            "Người báo cáo": rr["sender"],
-            "Giờ gửi": rr["sent_at_vn"],
-            "Trạng thái": "Muộn" if rr["is_late"] else "Đúng giờ",
-            "Nội dung": rr["text"] + (f"\n\n(+{rr['extra_count']} tin nhắn khác)" if rr["extra_count"] else ""),
-        } for rr in wd["reports"]]
+    st.markdown("**Nội dung báo cáo:**")
+    rows = [{
+        "Người báo cáo": rr["sender"],
+        "Giờ gửi": rr["sent_at_vn"],
+        "Trạng thái": "Muộn" if rr["is_late"] else "Đúng giờ",
+        "Nội dung": rr["text"] + (f"\n\n(+{rr['extra_count']} tin nhắn khác)" if rr["extra_count"] else ""),
+    } for rr in wd["reports"]]
+    if rows:
         st.dataframe(rows, use_container_width=True, height=400)
+    else:
+        # Render headers only when no qualifying reports
+        st.dataframe(
+            pd.DataFrame(columns=["Người báo cáo", "Giờ gửi", "Trạng thái", "Nội dung"]),
+            use_container_width=True,
+        )
 
 
 if run:
@@ -665,7 +671,6 @@ if run:
 
     # ── Weekly mode: dispatch cho từng group, render trực tiếp, return sớm ──
     if use_weekly:
-        from datetime import time, timedelta
         VN_OFFSET = 7 * 3600
         weekly_target_str = weekly_date_input.strftime("%Y-%m-%d")
         weekly_results = []
@@ -748,7 +753,6 @@ if run:
     # D-1 chỉ khi single-day
     _is_single_day = date_from_str == date_to_str
     if _is_single_day:
-        from datetime import timedelta
         _d1_str   = (datetime.strptime(date_from_str, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
         _d1_from  = parse_date_arg(_d1_str, end_of_day=False)
         _d1_to    = parse_date_arg(_d1_str, end_of_day=True)
