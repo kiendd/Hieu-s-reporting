@@ -1123,6 +1123,44 @@ def print_weekly_report(data: dict) -> None:
             print(f"  - {name} ({late_map.get(name, '?')})")
         print()
 
+    asm_data  = data.get("asm_data")
+    tttc_data = data.get("tttc_data")
+
+    if asm_data:
+        print(f"--- Shop VT: tổng cọc {asm_data['total_deposits']}, "
+              f"tổng ra tiêm {asm_data['total_ra_tiem']} ---")
+        low  = asm_data.get("low_deposit_shops", [])
+        high = asm_data.get("high_deposit_shops", [])
+        if low:
+            print(f"  Shop cọc thấp ({len(low)}):")
+            for s in low:
+                print(f"    - {s['shop_ref']} — {s['deposit_count']} cọc ({s['sender']})")
+        if high:
+            print(f"  Shop cọc tốt ({len(high)}):")
+            for s in high:
+                print(f"    - {s['shop_ref']} — {s['deposit_count']} cọc ({s['sender']})")
+        print()
+
+    if tttc_data:
+        def _fmt_pct(v): return f"{v:.1f}%" if v is not None else "—"
+        def _fmt_vnd(v): return f"{v:,} đ" if v is not None else "—"
+        print(f"--- TTTC: {tttc_data['total_reports']} trung tâm ---")
+        print(f"  TB bill TB : {_fmt_vnd(tttc_data['avg_tb_bill'])}")
+        print(f"  %HT TB     : {_fmt_pct(tttc_data['avg_revenue_pct'])}")
+        print(f"  %HOT TB    : {_fmt_pct(tttc_data['avg_hot_pct'])}")
+        print(f"  %tr HOT TB : {_fmt_pct(tttc_data['avg_hot_ratio'])}")
+        if tttc_data["top_centers"]:
+            print(f"  Top trung tâm theo %HT:")
+            for c in tttc_data["top_centers"]:
+                print(f"    - {c['venue']} — %HT {_fmt_pct(c['revenue_pct'])} "
+                      f"({c['sender']})")
+        if tttc_data["bottom_centers"]:
+            print(f"  Trung tâm cần chú ý:")
+            for c in tttc_data["bottom_centers"]:
+                print(f"    - {c['venue']} — %HT {_fmt_pct(c['revenue_pct'])} "
+                      f"({c['sender']})")
+        print()
+
     if reports:
         print(f"--- Nội dung báo cáo ({len(reports)}) ---")
         for r in reports:
