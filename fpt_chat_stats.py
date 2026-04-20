@@ -977,12 +977,40 @@ def analyze_weekly(messages: list,
     reporters = {r["sender"] for r in reports}
     missing_list = sorted(n for n in member_names if n not in reporters)
 
+    # --- Structured dispatch: parse each qualifying message by kind ---
+    parsed_shop_vt: list[dict] = []
+    parsed_tttc:    list[dict] = []
+    for sender, items in by_sender.items():
+        for dt, _vn_dt, content in items:
+            # Reconstruct a minimal msg dict for the parsers.
+            # Use the per-message dt so each fake_msg gets a unique id.
+            fake_msg = {
+                "content":   content,
+                "user":      {"displayName": sender, "id": ""},
+                "createdAt": dt.isoformat(),
+                "id":        f"{sender}-{dt.timestamp()}",
+                "type":      "TEXT",
+            }
+            kind = classify_report(content)
+            if kind == "shop_vt":
+                parsed_shop_vt.append(parse_asm_report(fake_msg))
+            elif kind == "tttc":
+                parsed_tttc.append(parse_tttc_report(fake_msg))
+            # unknown → dropped from structured pipelines, still in reports[]
+
+    asm_data  = analyze_asm_reports(parsed_shop_vt) if parsed_shop_vt else None
+    tttc_data = analyze_tttc_reports(parsed_tttc)   if parsed_tttc    else None
+
     return {
-        "target_date":  target_date_vn,
-        "deadline":     deadline,
-        "reports":      reports,
-        "late_list":    late_list,
-        "missing_list": missing_list,
+        "target_date":    target_date_vn,
+        "deadline":       deadline,
+        "reports":        reports,
+        "late_list":      late_list,
+        "missing_list":   missing_list,
+        "asm_data":       asm_data,
+        "tttc_data":      tttc_data,
+        "parsed_shop_vt": parsed_shop_vt,
+        "parsed_tttc":    parsed_tttc,
     }
 
 

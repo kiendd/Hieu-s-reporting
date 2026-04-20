@@ -152,5 +152,51 @@ check("missing section lists Hoàng E", "Hoàng E" in out)
 check("late marker 'MUỘN' and 'Trần Thị B' both appear", "MUỘN" in out and "Trần Thị B" in out)
 check("content section includes report body substring", "Doanh thu 133% HT" in out)
 
+# --- New: structured dispatch ---
+SHOP_VT_BODY = pathlib.Path("templates/weekend/7").read_text(encoding="utf-8")
+TTTC_BODY    = pathlib.Path("templates/weekend/1").read_text(encoding="utf-8")
+
+MIXED_MESSAGES = [
+    msg("Nguyễn Văn A", "2026-04-20T02:00:00Z", SHOP_VT_BODY),
+    msg("Trần Thị B",   "2026-04-20T03:00:00Z", TTTC_BODY),
+]
+out = analyze_weekly(MIXED_MESSAGES, GROUP_MEMBERS, "2026-04-20")
+print("\n--- Mixed Shop VT + TTTC day ---")
+check("reports has 2 entries",         len(out["reports"]) == 2)
+check("asm_data present",              out.get("asm_data")  is not None)
+check("tttc_data present",             out.get("tttc_data") is not None)
+check("parsed_shop_vt has 1",          len(out.get("parsed_shop_vt", [])) == 1)
+check("parsed_tttc has 1",             len(out.get("parsed_tttc", [])) == 1)
+check("asm_data.total_deposits > 0",
+      out["asm_data"]["total_deposits"] > 0)
+check("tttc_data.total_reports == 1",
+      out["tttc_data"]["total_reports"] == 1)
+
+# Shop-VT-only day
+out = analyze_weekly(
+    [msg("Nguyễn Văn A", "2026-04-20T02:00:00Z", SHOP_VT_BODY)],
+    GROUP_MEMBERS, "2026-04-20",
+)
+print("\n--- Shop VT only ---")
+check("asm_data present",   out.get("asm_data")  is not None)
+check("tttc_data is None",  out.get("tttc_data") is None)
+
+# TTTC-only day
+out = analyze_weekly(
+    [msg("Nguyễn Văn A", "2026-04-20T02:00:00Z", TTTC_BODY)],
+    GROUP_MEMBERS, "2026-04-20",
+)
+print("\n--- TTTC only ---")
+check("asm_data is None",   out.get("asm_data")  is None)
+check("tttc_data present",  out.get("tttc_data") is not None)
+
+# Zero-reports day
+out = analyze_weekly([], GROUP_MEMBERS, "2026-04-20")
+print("\n--- Zero reports ---")
+check("asm_data is None",   out.get("asm_data")  is None)
+check("tttc_data is None",  out.get("tttc_data") is None)
+check("parsed_shop_vt is []", out.get("parsed_shop_vt", None) == [])
+check("parsed_tttc    is []", out.get("parsed_tttc",    None) == [])
+
 print(f"\n{FAIL} failure(s)" if FAIL else "\nAll checks passed.")
 sys.exit(1 if FAIL else 0)
