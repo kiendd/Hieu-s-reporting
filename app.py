@@ -83,6 +83,7 @@ try:
     from fpt_chat_stats import (
         analyze_asm_reports,
         analyze_multiday,
+        analyze_weekly,
         build_session,
         check_asm_compliance,
         check_late_reporters,
@@ -96,6 +97,7 @@ try:
         parse_date_arg,
         to_vn_str,
         write_asm_excel,
+        write_weekly_excel,
     )
 except ImportError as e:
     st.error(f"Không tìm thấy fpt_chat_stats.py: {e}")
@@ -307,13 +309,16 @@ if st.session_state.needs_save:
 st.divider()
 date_mode = st.radio(
     "Khoảng thời gian",
-    ["Hôm nay", "Chọn khoảng ngày"],
+    ["Hôm nay", "Chọn khoảng ngày", "Báo cáo tuần"],
     horizontal=True,
     label_visibility="collapsed",
 )
 use_today = date_mode == "Hôm nay"
+use_weekly = date_mode == "Báo cáo tuần"
 
-if not use_today:
+if use_weekly:
+    weekly_date_input = st.date_input("Ngày báo cáo tuần", value=date.today())
+elif not use_today:
     col1, col2 = st.columns(2)
     with col1:
         date_from_input = st.date_input("Từ ngày", value=date.today())
@@ -595,6 +600,55 @@ def _render_result(r: dict) -> None:
                     st.divider()
 
 
+def _render_weekly_result(r: dict) -> None:
+    if r.get("error"):
+        st.error(f"Lỗi: {r['error']}")
+        return
+
+    wd = r["weekly_data"]
+    target_date = r["target_date"]
+    short_id = r["group_id"][-8:] if len(r["group_id"]) >= 8 else r["group_id"]
+
+    col_hdr, col_dl = st.columns([4, 1])
+    with col_hdr:
+        st.subheader(f"Báo cáo tuần — {target_date}")
+    with col_dl:
+        st.download_button(
+            label="⬇️ Tải Excel",
+            data=r["excel_buf"],
+            file_name=f"bao_cao_tuan_{short_id}_{target_date}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key=f"dl_weekly_{r['group_id']}",
+        )
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Đã báo cáo", len(wd["reports"]))
+    c2.metric("Muộn", len(wd["late_list"]))
+    c3.metric("Chưa báo cáo", len(wd["missing_list"]))
+
+    if wd["missing_list"]:
+        st.markdown(f"**Chưa báo cáo ({len(wd['missing_list'])}):**")
+        for n in wd["missing_list"]:
+            st.markdown(f"- {n}")
+
+    if wd["late_list"]:
+        st.markdown(f"**Muộn ({len(wd['late_list'])}):**")
+        late_map = {rr["sender"]: rr["sent_at_vn"] for rr in wd["reports"] if rr["is_late"]}
+        for n in wd["late_list"]:
+            st.markdown(f"- {n} ({late_map.get(n, '?')})")
+
+    if wd["reports"]:
+        st.markdown("**Nội dung báo cáo:**")
+        rows = [{
+            "Người báo cáo": rr["sender"],
+            "Giờ gửi": rr["sent_at_vn"],
+            "Trạng thái": "Muộn" if rr["is_late"] else "Đúng giờ",
+            "Nội dung": rr["text"] + (f"\n\n(+{rr['extra_count']} tin nhắn khác)" if rr["extra_count"] else ""),
+        } for rr in wd["reports"]]
+        st.dataframe(rows, use_container_width=True, height=400)
+
+
 if run:
     if not token:
         st.error("Vui lòng nhập Token.")
@@ -604,6 +658,77 @@ if run:
         st.stop()
 
     _ls_set("fpt_token", token)
+
+    if not use_weekly:
+        # clear any stale weekly results when running daily/multi-day
+        st.session_state["_weekly_results"] = []
+
+    # ── Weekly mode: dispatch cho từng group, render trực tiếp, return sớm ──
+    if use_weekly:
+        from datetime import time, timedelta
+        VN_OFFSET = 7 * 3600
+        weekly_target_str = weekly_date_input.strftime("%Y-%m-%d")
+        weekly_results = []
+        for entry in selected_groups:
+            group_id = extract_group_id(entry["url"])
+            cfg = entry["config"]
+            with st.status(f"Đang xử lý {entry['label']}…", expanded=False) as status:
+                try:
+                    session = build_session(token)
+                    group_info = fetch_group_info(session, "https://api-chat.fpt.com", group_id)
+                    tab_label = entry["label"]
+                    if tab_label == group_id[-8:]:
+                        api_name = group_info.get("name") or group_info.get("title") or ""
+                        if api_name:
+                            tab_label = api_name
+
+                    # Half-open VN-day window [target 00:00+07, target+1 00:00+07)
+                    vn_start_utc = datetime.combine(
+                        weekly_date_input, time(0, 0), tzinfo=timezone.utc
+                    ) - timedelta(hours=7)
+                    vn_end_utc = vn_start_utc + timedelta(days=1)
+
+                    messages = fetch_all_messages(
+                        token=token, group_id=group_id, date_from=vn_start_utc,
+                    )
+                    messages = filter_by_date(
+                        messages, vn_start_utc, vn_end_utc - timedelta(microseconds=1),
+                    )
+
+                    members = fetch_group_members(session, "https://api-chat.fpt.com", group_id)
+                    if not members:
+                        raise RuntimeError(
+                            "fetch_group_members trả rỗng hoặc lỗi — không thể kiểm tra compliance."
+                        )
+
+                    weekly_data = analyze_weekly(
+                        messages, members, weekly_target_str, deadline=cfg["deadline"],
+                    )
+
+                    excel_buf = io.BytesIO()
+                    write_weekly_excel(weekly_data, members, excel_buf)
+                    excel_buf.seek(0)
+
+                    status.update(label=f"✓ {tab_label}", state="complete")
+                    weekly_results.append({
+                        "tab_label": tab_label,
+                        "group_id": group_id,
+                        "target_date": weekly_target_str,
+                        "weekly_data": weekly_data,
+                        "excel_buf": excel_buf,
+                        "error": None,
+                    })
+                except Exception as exc:
+                    status.update(label=f"✗ {entry['label']}", state="error")
+                    weekly_results.append({
+                        "tab_label": entry["label"],
+                        "group_id": group_id,
+                        "error": str(exc),
+                    })
+
+        st.session_state["_weekly_results"] = weekly_results
+        st.session_state["_results"] = []  # clear daily results to avoid mixing views
+        st.rerun()  # trigger rerun so the render block below picks up the new results
 
     # Tính date range
     import time as _time
@@ -752,6 +877,17 @@ if run:
 
 
 # ── Render kết quả (ngoài if run để giữ kết quả qua các rerun) ────────────────
+_cached_weekly = st.session_state.get("_weekly_results", [])
+if _cached_weekly:
+    st.divider()
+    if len(_cached_weekly) == 1:
+        _render_weekly_result(_cached_weekly[0])
+    else:
+        _tabs = st.tabs([r["tab_label"] for r in _cached_weekly])
+        for tab, result in zip(_tabs, _cached_weekly):
+            with tab:
+                _render_weekly_result(result)
+
 _cached_results = st.session_state.get("_results", [])
 if _cached_results:
     st.divider()
