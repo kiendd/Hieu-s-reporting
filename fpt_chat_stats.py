@@ -272,6 +272,52 @@ def detect_asm_reports(messages: list) -> list:
     return result
 
 
+def _parse_vnd_amount(raw: str, unit_suffix: str | None) -> int | None:
+    """Normalize a Vietnamese-formatted amount string to an integer VND.
+
+    Rules (in order):
+      1. If unit_suffix ∈ {"tr", "M", "triệu"}: scale = 1_000_000.
+         - `,` or `.` followed by 1-3 digits → decimal part.
+         - e.g. "2,2" + "tr" → 2_200_000; "1.625" + "tr" → 1_625_000.
+      2. Without a unit suffix: both `,` and `.` are thousand separators.
+         - e.g. "134.927.000" → 134_927_000; "1.625,000" → 1_625_000.
+      3. If the input is unresolvable (fractional without unit, non-numeric, empty): return None.
+    """
+    if not raw:
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+
+    if unit_suffix in ("tr", "M", "triệu"):
+        # allow one decimal separator of 1-3 digits
+        m = re.fullmatch(r"(\d+)(?:[.,](\d{1,3}))?", s)
+        if not m:
+            return None
+        whole = int(m.group(1))
+        frac  = m.group(2)
+        if frac is None:
+            return whole * 1_000_000
+        # "2,2" → 2.2M; "1.625" → 1.625M
+        scaled = whole * 1_000_000 + int(frac) * (10 ** (6 - len(frac)))
+        return scaled
+
+    # No unit: both . and , are thousand separators
+    if not re.fullmatch(r"\d+(?:[.,]\d+)*", s):
+        return None
+    # Reject if any group after the first has != 3 digits
+    digits_only = re.sub(r"[.,]", "", s)
+    # Require that removing separators leaves pure digits and that each
+    # separated group after the first is exactly 3 digits (thousand grouping).
+    groups = re.split(r"[.,]", s)
+    if len(groups) > 1 and any(len(g) != 3 for g in groups[1:]):
+        return None
+    try:
+        return int(digits_only)
+    except ValueError:
+        return None
+
+
 def _extract_sections(content: str) -> dict:
     """Trích xuất các mục báo cáo theo pattern '- Label: content'."""
     sections = {}
