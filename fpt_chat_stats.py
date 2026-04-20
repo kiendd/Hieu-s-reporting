@@ -727,6 +727,47 @@ def print_asm_report(asm_data: dict,
     print(f"\n{sep}")
 
 
+def print_weekly_report(data: dict) -> None:
+    """In báo cáo tuần một ngày ra stdout."""
+    target = data["target_date"]
+    deadline = data["deadline"]
+    reports = data["reports"]
+    late_list = data["late_list"]
+    missing_list = data["missing_list"]
+
+    sep = "=" * 65
+    print(sep)
+    print(f"  BÁO CÁO TUẦN — {target}")
+    print(sep)
+    print(f"  Deadline: {deadline}")
+    print(f"  Đã báo cáo: {len(reports)}")
+    print(f"  Muộn: {len(late_list)}")
+    print(f"  Chưa báo cáo: {len(missing_list)}")
+    print()
+
+    if missing_list:
+        print(f"--- Chưa báo cáo ({len(missing_list)}) ---")
+        for name in missing_list:
+            print(f"  - {name}")
+        print()
+
+    if late_list:
+        print(f"--- Muộn ({len(late_list)}) ---")
+        late_map = {r["sender"]: r["sent_at_vn"] for r in reports if r["is_late"]}
+        for name in late_list:
+            print(f"  - {name} ({late_map.get(name, '?')})")
+        print()
+
+    if reports:
+        print(f"--- Nội dung báo cáo ({len(reports)}) ---")
+        for r in reports:
+            suffix = " — MUỘN" if r["is_late"] else ""
+            extra  = f" (+{r['extra_count']} tin nhắn khác)" if r["extra_count"] else ""
+            print(f"[{r['sender']} — {r['sent_at_vn']}{suffix}{extra}]")
+            print(r["text"])
+            print()
+
+
 # ---------------------------------------------------------------------------
 # Excel Export
 # ---------------------------------------------------------------------------

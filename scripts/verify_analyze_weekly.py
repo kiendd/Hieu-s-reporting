@@ -134,5 +134,23 @@ check("Mix: sent_at_vn == '14:00' (only qualifying kept)", r_mix["reports"][0]["
 check("Mix: text is REPORT_BODY (not 'Ok anh' or 400-char spam)", r_mix["reports"][0]["text"] == REPORT_BODY)
 check("Mix: extra_count == 0 (below-threshold filtered BEFORE counting)", r_mix["reports"][0]["extra_count"] == 0)
 
+# --- print_weekly_report smoke ---
+import io, contextlib
+from fpt_chat_stats import print_weekly_report
+
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    print_weekly_report(result)
+out = buf.getvalue()
+
+check("header has 'BÁO CÁO TUẦN'", "BÁO CÁO TUẦN" in out)
+check("header has target_date", "2026-04-20" in out)
+check("header has 'Đã báo cáo: 2'", "Đã báo cáo: 2" in out)
+check("header has 'Muộn: 1'", "Muộn: 1" in out)
+check("header has 'Chưa báo cáo: 3'", "Chưa báo cáo: 3" in out)
+check("missing section lists Hoàng E", "Hoàng E" in out)
+check("late marker 'MUỘN' and 'Trần Thị B' both appear", "MUỘN" in out and "Trần Thị B" in out)
+check("content section includes report body substring", "Doanh thu 133% HT" in out)
+
 print(f"\n{FAIL} failure(s)" if FAIL else "\nAll checks passed.")
 sys.exit(1 if FAIL else 0)
