@@ -429,6 +429,180 @@ def parse_asm_report(msg: dict) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# TTTC Parser (weekly report — weekend shape)
+# ---------------------------------------------------------------------------
+
+# TTTC/VX/LC: must be followed by digit (venue code) to exclude "TTTC (Thứ 7...)" headers.
+# shop: any content on the same line.
+_TTTC_VENUE_RE = re.compile(
+    r"(?:"
+    r"(TTTC|VX|LC)\s*[:\-]?\s*(?!\s*\()([^\n]+)"   # TTTC/VX/LC not followed by "("
+    r"|shop\s*[:\-]?\s*([^\n]+)"                      # shop: anything
+    r")",
+    re.IGNORECASE,
+)
+
+# Revenue %: require strong context (DT/DS abbreviation, MTD qualifier, center-level phrasing)
+# to avoid matching individual TVV metrics deep in body text.
+_TTTC_REVENUE_PCT_RE = re.compile(
+    r"(?:"
+    r"DT(?!\s*HOT)\b[^%\n]{0,50}?HT\s*:"            # DT … HT: 133%
+    r"|DS\s*T[oổ]ng\b"                                # DS Tổng về 143%
+    r"|%HT\s*ng[àa]y"                                 # %HT ngày: 145%
+    r"|Doanh\s*thu\s*(?:MTD|trong\s*ng[àa]y|ng[àa]y\s*đ[aạ]t)"  # Doanh thu MTD / ngày đạt
+    r"|Trung\s*t[âa]m\s*v[eề]"                       # Trung tâm về 83%
+    r")"
+    r"[^%\n]{0,60}?(\d[\d.,]*)\s*%",
+    re.IGNORECASE,
+)
+
+# HOT achievement %: DT HOT / DS Hot / "Hot đạt|về" at line-start (after optional non-word chars).
+# Bare \bHot\b intentionally removed to avoid false positives in "tỷ trọng HOT",
+# "kèm hot" and similar ratio/narrative contexts.
+_TTTC_HOT_PCT_RE = re.compile(
+    r"(?:"
+    r"DT\s*HOT"                          # DT HOT … 133%
+    r"|DS\s*Hot"                          # DS Hot về 215%
+    r"|(?m:^[^\w\n]*Hot\s+(?:đạt|về)\b)" # Hot đạt / Hot về at line start
+    r")"
+    r"[^%\n]{0,40}?(\d[\d.,]*)\s*%",
+    re.IGNORECASE,
+)
+
+# HOT ratio (tỷ trọng HOT or Doanh thu HH — same concept, different notations).
+# The [^%\n]{0,20}? inside tỷ trọng arm handles "DT" / "doanh thu" inserts between
+# "trọng" and "HOT" (e.g. "Tỉ trọng DT HOT: 51%").
+_TTTC_HOT_RATIO_RE = re.compile(
+    r"(?:"
+    r"[Tt][ỉỷi]\s*tr[oọ]ng[^%\n]{0,20}?HOT"  # Tỷ/Tỉ trọng … HOT (any qualifier)
+    r"|[Dd]oanh\s*thu\s*HH"                    # Doanh thu HH (W8 notation)
+    r"|DT\s*HH"                                 # DT HH shorthand
+    r")"
+    r"[^%\n]{0,15}?(\d[\d.,]*)\s*%",
+    re.IGNORECASE,
+)
+
+_TTTC_TB_BILL_VALUE_RE = re.compile(
+    r"(?:TB\s*[Bb]ill|[Gg]i[aá]\s*tr[iị]\s*bill)[^\d]*([\d.,]+)\s*(tr|M|tri[eệ]u)?",
+    re.IGNORECASE,
+)
+_TTTC_CUSTOMER_RE = re.compile(
+    r"(?:[Ll][ưượ][oợ]t\s*)?(?:KH|kh[aá]ch)\s*mua[^\d]*(\d+)",
+)
+
+# Boundary markers that signal the start of per-TVV narrative sections.
+# Metric searches are restricted to content BEFORE this boundary to avoid
+# capturing individual TVV stats as center-level metrics.
+_TTTC_NARRATIVE_BOUNDARY_RE = re.compile(
+    r"\n[^\n]*(?:t[íi]ch\s*c[ựu]c|v[aấ]n\s*đ[eề]|đi[eể]m\s*s[áa]ng"
+    r"|b[aạ]n\s*tvv|ph[aâ]n\s*t[íi]ch)",
+    re.IGNORECASE,
+)
+
+
+def _first_n_lines(content: str, n: int = 3) -> str:
+    """Return the first n non-empty lines joined by newline."""
+    out = []
+    for line in content.splitlines():
+        if line.strip():
+            out.append(line)
+            if len(out) >= n:
+                break
+    return "\n".join(out)
+
+
+def _to_pct(raw: str) -> float | None:
+    """Parse '145' / '128,18' / '133.5' → float percentage, else None."""
+    if not raw:
+        return None
+    s = raw.strip().replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _tttc_metrics_area(content: str) -> str:
+    """Return the part of content safe for metric extraction.
+
+    Cuts off before per-TVV narrative sections (Tích cực / Vấn đề / Bạn TVV /
+    Phân tích) to prevent individual-TVV metrics from being captured as
+    center-level metrics.  If no such boundary is found the full content is
+    returned (covers flat-narrative templates like W4 and W6).
+    """
+    m = _TTTC_NARRATIVE_BOUNDARY_RE.search(content)
+    if m:
+        return content[:m.start()]
+    return content
+
+
+def parse_tttc_report(msg: dict) -> dict:
+    """Parse một báo cáo TTTC (weekend). Các field metric đều nullable."""
+    content = msg.get("content") or ""
+    user = msg.get("user") or {}
+
+    # Venue: restrict to first 3 non-empty lines to avoid body-text mentions
+    header = _first_n_lines(content, 3)
+    vm = _TTTC_VENUE_RE.search(header)
+    venue = None
+    if vm:
+        # Group 2: TTTC/VX/LC match; Group 3: shop match
+        type_prefix = (vm.group(1) or "shop").strip()
+        name_part = (vm.group(2) or vm.group(3) or "").strip()
+        venue = (type_prefix + " " + name_part).strip()
+
+    # All metric searches operate on the "safe" area before TVV narratives
+    area = _tttc_metrics_area(content)
+
+    rm = _TTTC_REVENUE_PCT_RE.search(area)
+    revenue_pct = _to_pct(rm.group(1)) if rm else None
+
+    hm = _TTTC_HOT_PCT_RE.search(area)
+    hot_pct = _to_pct(hm.group(1)) if hm else None
+
+    hrm = _TTTC_HOT_RATIO_RE.search(area)
+    hot_ratio = _to_pct(hrm.group(1)) if hrm else None
+
+    tb_bill = None
+    tbm = _TTTC_TB_BILL_VALUE_RE.search(area)
+    if tbm:
+        raw_val, unit = tbm.group(1), tbm.group(2)
+        if unit is None and re.match(r'^\d+[.,]\d{1,2}$', raw_val):
+            # "2.2" / "2,3" without explicit unit → implicit millions
+            unit = "M"
+        tb_bill = _parse_vnd_amount(raw_val, unit)
+
+    cm = _TTTC_CUSTOMER_RE.search(area)
+    customer_count = int(cm.group(1)) if cm else None
+
+    sections = _extract_sections(content)
+
+    def get_section(*needles):
+        for needle in needles:
+            for key, val in sections.items():
+                if needle in key:
+                    return val
+        return None
+
+    return {
+        "venue":           venue,
+        "revenue_pct":     revenue_pct,
+        "hot_pct":         hot_pct,
+        "hot_ratio":       hot_ratio,
+        "tb_bill":         tb_bill,
+        "customer_count":  customer_count,
+        "tich_cuc":   get_section("tích cực"),
+        "van_de":     get_section("vấn đề"),
+        "da_lam":     get_section("đã làm"),
+        "giai_phap":  get_section("giải pháp"),
+        "sender":     user.get("displayName", "Unknown"),
+        "sender_id":  user.get("id", ""),
+        "sent_at":    msg.get("createdAt", ""),
+        "message_id": msg.get("id", ""),
+    }
+
+
 def analyze_asm_reports(parsed_reports: list,
                         deposit_low: int = 2, deposit_high: int = 5) -> dict:
     """Phân tích báo cáo ASM: lọc shop theo đặt cọc, thu thập ý tưởng, highlight."""
