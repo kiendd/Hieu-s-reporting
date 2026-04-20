@@ -433,7 +433,7 @@ def parse_asm_report(msg: dict) -> dict:
 # TTTC Parser (weekly report — weekend shape)
 # ---------------------------------------------------------------------------
 
-# TTTC/VX/LC: must be followed by digit (venue code) to exclude "TTTC (Thứ 7...)" headers.
+# TTTC/VX/LC: not followed by "(" — excludes report-type headers like "TTTC (Thứ 7...)".
 # shop: any content on the same line.
 _TTTC_VENUE_RE = re.compile(
     r"(?:"
@@ -547,7 +547,7 @@ def parse_tttc_report(msg: dict) -> dict:
     vm = _TTTC_VENUE_RE.search(header)
     venue = None
     if vm:
-        # Group 2: TTTC/VX/LC match; Group 3: shop match
+        # Group 1: TTTC/VX/LC keyword; Group 2: venue after it; Group 3: shop name
         type_prefix = (vm.group(1) or "shop").strip()
         name_part = (vm.group(2) or vm.group(3) or "").strip()
         venue = (type_prefix + " " + name_part).strip()
