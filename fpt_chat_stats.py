@@ -356,7 +356,7 @@ def _extract_sections(content: str) -> dict:
         r"""^[ \t]*                              # leading ws
             (?:[-–•]|\d+\.)?[ \t]*               # optional bullet / number
             (?P<label>[A-ZÀ-Ỵa-zà-ỵ][^\n:：]{1,40}?)
-            [ \t]*[:：][ \t]*                    # colon (ascii or fullwidth)
+            [ \t]*[:：](?!//)[ \t]*              # colon, NOT followed by // (reject URLs)
             (?P<rest>.*)$                        # same-line content (may be empty)
         """,
         re.VERBOSE,

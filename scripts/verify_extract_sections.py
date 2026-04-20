@@ -63,6 +63,20 @@ sc = _extract_sections(C)
 check("form C: has kết quả (numbered)",    has_key(sc, "kết quả"))
 check("form C: has giải pháp (numbered)",  has_key(sc, "giải pháp"))
 
+# URL line must not create a spurious "http"/"https" label
+D = """
+- Tích cực: khoẻ
+- Đã làm: https://forms.gle/abc123 đã gửi cho team
+- Vấn đề: chậm
+"""
+sd = _extract_sections(D)
+check("form D: no 'http'/'https' spurious label",
+      not (has_key(sd, "http") or has_key(sd, "https")))
+check("form D: đã làm still captured (URL safely in body)",
+      has_key(sd, "đã làm"))
+check("form D: vấn đề still captured after URL line",
+      has_key(sd, "vấn đề"))
+
 # Regression: all daily templates still parse *something*.
 # Note: individual templates use varied label phrasing (e.g. daily/6 uses
 # "Đã triển khai" not "Đã làm"; daily/7 uses "NV cần cải thiện" not
