@@ -3,11 +3,14 @@
 ### Requirement: Weekly Report Analysis Function
 `fpt_chat_stats` SHALL expose an `analyze_weekly(messages, group_members, target_date_vn, deadline)` function that produces a single-day compliance-and-content view, independent of the daily shop-report parser.
 
-A message qualifies as "a weekly report sent" when all of the following hold:
+A message qualifies as "a weekly report sent" when ALL of the following hold:
 - `type == "TEXT"`
-- message body is non-empty after whitespace strip
+- message body (`content` field) is at least `150` characters after whitespace strip (the length threshold)
+- message body contains at least one of the following keywords, case-insensitive, matched as substring: `Đánh giá`, `báo cáo`, `shop`, `TTTC`, `VX`, `trung tâm`, `Kết quả`, `cọc`
 - sender's `displayName` is present in `group_members`
 - the message's VN-time date (UTC+7) equals `target_date_vn`
+
+The length threshold (`150`) and keyword list SHALL be defined as module-level constants in `fpt_chat_stats.py` (e.g. `WEEKLY_MIN_LENGTH`, `WEEKLY_KEYWORDS`) so they can be tuned in one place. Configurability via CLI or config file is OUT OF SCOPE for this change.
 
 The returned dict SHALL contain:
 - `target_date` (str, `YYYY-MM-DD`)
@@ -37,6 +40,26 @@ The function SHALL NOT invoke `detect_asm_reports`, `parse_asm_report`, or `anal
 - **GIVEN** sender C sends a TEXT message whose body is whitespace-only on `target_date_vn`
 - **WHEN** `analyze_weekly` runs
 - **THEN** C appears in `missing_list`, not in `reports`
+
+#### Scenario: Short acknowledgment ignored (length threshold)
+- **GIVEN** sender E sends one TEXT message "Ok anh" (length < 150) on `target_date_vn` and nothing else
+- **WHEN** `analyze_weekly` runs
+- **THEN** E appears in `missing_list`, not in `reports` — short messages do not qualify as reports
+
+#### Scenario: Long message without report keyword ignored
+- **GIVEN** sender F sends one TEXT message of 400 characters on `target_date_vn` that contains none of the keywords `Đánh giá / báo cáo / shop / TTTC / VX / trung tâm / Kết quả / cọc`
+- **WHEN** `analyze_weekly` runs
+- **THEN** F appears in `missing_list`, not in `reports`
+
+#### Scenario: Keyword match is case-insensitive and substring-based
+- **GIVEN** sender G sends a qualifying-length message whose body contains `"TTTC"` or `"trung tâm"` or `"Đánh Giá"` (mixed case) with no other keywords
+- **WHEN** `analyze_weekly` runs
+- **THEN** G's message qualifies; G appears in `reports`
+
+#### Scenario: Qualifying message among multiple non-qualifying messages
+- **GIVEN** sender H sends three TEXT messages on `target_date_vn`: (1) "Ok anh" at 08:00, (2) a 400-char message with no keywords at 10:00, (3) a full 800-char report containing `Đánh giá` at 14:00
+- **WHEN** `analyze_weekly` runs
+- **THEN** H's `reports` entry has `sent_at_vn = 14:00`, `text` equal to message (3), and `extra_count = 0` (only message 3 qualifies; 1 and 2 are filtered before counting extras)
 
 #### Scenario: Sender not in group_members ignored
 - **GIVEN** a TEXT message from an account whose `displayName` is not in `group_members`

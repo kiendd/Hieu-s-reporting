@@ -20,7 +20,7 @@ Summarised:
 
 A new single-day mode, **Báo cáo tuần (Weekly Report)**, that:
 - Runs against one user-chosen date.
-- Treats *any* TEXT message from a known group member on that day as "a report sent" (no shop/cọc heuristic).
+- Classifies messages as "a report sent" using a length + keyword heuristic (body ≥ 150 chars AND contains at least one of `Đánh giá / báo cáo / shop / TTTC / VX / trung tâm / Kết quả / cọc`, case-insensitive). Short acknowledgments and off-topic chatter do NOT count as reports.
 - Produces the same three-bucket view as daily: đúng giờ / muộn / chưa báo cáo.
 - Dumps each ASM's raw text verbatim — no section parsing, no metric extraction.
 
@@ -30,9 +30,10 @@ Surfaces:
 
 ## Design notes
 
-- New function `analyze_weekly(messages, group_members, target_date_vn, deadline)` in `fpt_chat_stats.py`. It does NOT call `detect_asm_reports` or `parse_asm_report` — weekly detection is independent and content-agnostic.
-- "Report sent" = a message where `type == "TEXT"`, body is non-empty after strip, sender's `displayName` is in `group_members`, and the VN-time date equals `target_date_vn`.
-- If an ASM sends multiple qualifying messages on that day, use the **earliest** one as their report. Include a note `(+N tin nhắn khác)` in the content row so the reviewer knows there are more.
+- New function `analyze_weekly(messages, group_members, target_date_vn, deadline)` in `fpt_chat_stats.py`. It does NOT call `detect_asm_reports` or `parse_asm_report` — weekly detection is independent of the daily shop-format heuristic.
+- "Report sent" = a message where `type == "TEXT"`, body (`content`) has length ≥ `WEEKLY_MIN_LENGTH` (= 150) after strip, body contains at least one substring from `WEEKLY_KEYWORDS` (case-insensitive) — `{Đánh giá, báo cáo, shop, TTTC, VX, trung tâm, Kết quả, cọc}`, sender's `displayName` is in `group_members`, and the VN-time date equals `target_date_vn`.
+- Classification constants live as module-level variables in `fpt_chat_stats.py` so the values are tunable in one place. Not exposed via CLI or config for this change.
+- If an ASM sends multiple **qualifying** messages on that day, use the **earliest** one as their report. Include a note `(+N tin nhắn khác)` in the content row so the reviewer knows there are more. Non-qualifying messages (short / no keyword) are not counted toward `extra_count`.
 - "Late" = the earliest qualifying message's VN-time is ≥ deadline on `target_date_vn`.
 - "Missing" = the ASM is in `group_members` but has no qualifying message on `target_date_vn`.
 - Deadline default = `20:00` VN, reusing the existing per-group deadline setting (no new config key).
