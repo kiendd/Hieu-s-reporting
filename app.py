@@ -433,6 +433,62 @@ def _render_shop_vt_sections(asm_data: dict, d1_shop_map: dict | None = None) ->
         st.caption("(không có)")
 
 
+def _render_tttc_sections(tttc_data: dict) -> None:
+    """Render TTTC aggregate metrics + top/bottom tables + ideas + highlights."""
+
+    def _fmt_pct(v): return f"{v:.1f}%" if v is not None else "—"
+    def _fmt_vnd(v): return f"{v:,}" if v is not None else "—"
+
+    st.subheader("🏥 TTTC — chỉ số trung tâm")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Trung tâm báo cáo", tttc_data["total_reports"])
+    c2.metric("TB bill TB",        _fmt_vnd(tttc_data["avg_tb_bill"]))
+    c3.metric("%HT TB",            _fmt_pct(tttc_data["avg_revenue_pct"]))
+    c4.metric("%HOT TB",           _fmt_pct(tttc_data["avg_hot_pct"]))
+
+    def _center_row(c: dict) -> dict:
+        return {
+            "Trung tâm":     c.get("venue") or "—",
+            "%HT":           _fmt_pct(c.get("revenue_pct")),
+            "%HOT":          _fmt_pct(c.get("hot_pct")),
+            "TB bill":       _fmt_vnd(c.get("tb_bill")),
+            "Tỉ trọng HOT":  _fmt_pct(c.get("hot_ratio")),
+            "Lượt KH mua":   c.get("customer_count") if c.get("customer_count") is not None else "—",
+            "ASM":           c.get("sender") or "—",
+        }
+
+    top = tttc_data.get("top_centers", [])
+    if top:
+        st.subheader("🏆 Top trung tâm (theo %HT)")
+        st.dataframe([_center_row(c) for c in top],
+                     use_container_width=True, hide_index=True)
+
+    bottom = tttc_data.get("bottom_centers", [])
+    if bottom:
+        st.subheader("⚠️ Trung tâm cần chú ý")
+        st.dataframe([_center_row(c) for c in bottom],
+                     use_container_width=True, hide_index=True)
+
+    ideas = tttc_data.get("ideas", [])
+    if ideas:
+        st.subheader("💡 Ý tưởng từ TTTC")
+        st.table([{"ASM": i["sender"], "Trung tâm": i["venue"], "Nội dung": i["da_lam"]}
+                  for i in ideas])
+
+    hl = tttc_data.get("highlights", {})
+    tich_cuc = hl.get("tich_cuc", [])
+    han_che  = hl.get("han_che",  [])
+    if tich_cuc or han_che:
+        st.subheader("⭐ Điểm nổi bật (TTTC)")
+        rows = (
+            [{"ASM": h["sender"], "Trung tâm": h["venue"],
+              "Loại": "Tích cực", "Nội dung": h["content"]} for h in tich_cuc]
+            + [{"ASM": h["sender"], "Trung tâm": h["venue"],
+                "Loại": "Hạn chế", "Nội dung": h["content"]} for h in han_che]
+        )
+        st.table(rows)
+
+
 def _render_result(r: dict) -> None:
     if r.get("error"):
         st.error(f"Lỗi: {r['error']}")
@@ -689,6 +745,17 @@ def _render_weekly_result(r: dict) -> None:
                 )
             else:
                 st.caption("Không có — tất cả ASM đã báo cáo gửi đúng giờ.")
+
+    # ── 2b. Shop VT + TTTC aggregate sections ────────────────────────────────
+    asm_data_w  = wd.get("asm_data")
+    tttc_data_w = wd.get("tttc_data")
+
+    if asm_data_w:
+        st.markdown("### 🏪 Shop VT")
+        _render_shop_vt_sections(asm_data_w, d1_shop_map=None)
+
+    if tttc_data_w:
+        _render_tttc_sections(tttc_data_w)
 
     # ── 3. Nội dung báo cáo (search + tabs + expanders) ───────────────────────
     st.divider()
