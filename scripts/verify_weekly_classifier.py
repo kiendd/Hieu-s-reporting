@@ -20,14 +20,19 @@ def check(label: str, cond: bool) -> None:
         FAIL += 1
     print(f"  [{status}] {label}")
 
-# Expected scores per sample: 8 = narrative (5), else 6
-EXPECTED_MIN = {1: 6, 2: 6, 3: 6, 4: 5, 5: 6, 6: 5, 7: 6, 8: 6}
+# Expected exact score per sample — samples 4 and 6 are narrative (5), others = 6
+EXPECTED_SCORE = {1: 6, 2: 6, 3: 6, 4: 5, 5: 6, 6: 5, 7: 6, 8: 6}
 
 print("Positive samples (templates/weekend/*)")
 for i in range(1, 9):
     p = pathlib.Path(f"templates/weekend/{i}")
-    s = _score_weekly_message(p.read_text(encoding="utf-8"))
-    check(f"sample {i}: score={s} (expected {EXPECTED_MIN[i]})", s == EXPECTED_MIN[i])
+    try:
+        text = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        check(f"sample {i}: file not found ({p})", False)
+        continue
+    s = _score_weekly_message(text)
+    check(f"sample {i}: score={s} (expected {EXPECTED_SCORE[i]})", s == EXPECTED_SCORE[i])
 
 print("\nNegative samples (casual chat must score < threshold)")
 negatives = [
