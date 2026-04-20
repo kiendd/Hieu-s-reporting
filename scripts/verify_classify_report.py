@@ -50,6 +50,7 @@ print("\nNegatives (no cọc, no TTTC cue → unknown)")
 negatives = [
     "Ok anh",
     "Nghỉ trưa nha mọi người",
+    "Tư vấn đơn cọc 10đ thành công hôm nay",  # multi-digit đ-currency must not match
     "Em đang trên đường tới shop",
     "",
     "Cám ơn mọi người nhé",

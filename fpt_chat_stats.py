@@ -255,7 +255,7 @@ def _score_weekly_message(content: str) -> int:
     return sum(1 for f in flags if f)
 
 
-_CLASSIFY_RE_COC = re.compile(r"\d+\s*cọc|cọc\s*\d+(?!\s*đ)", re.IGNORECASE)
+_CLASSIFY_RE_COC = re.compile(r"\d+\s*cọc|cọc\s*\d+(?!\d)(?!\s*đ)", re.IGNORECASE)
 _CLASSIFY_RE_TTTC = re.compile(
     r"\bTTTC\b|TB\s*[Bb]ill|%\s*HT|doanh\s*thu",
     re.IGNORECASE,
