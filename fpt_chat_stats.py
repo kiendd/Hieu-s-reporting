@@ -1349,6 +1349,46 @@ def write_weekly_excel(data: dict, group_members: list, path) -> None:
             wrap_text=True, vertical="top"
         )
 
+    # Sheet 3: Shop VT
+    ws3 = wb.create_sheet("Shop VT")
+    ws3.append(["Shop", "Số cọc", "Ra tiêm", "Mức", "ASM"])
+    for cell in ws3[1]:
+        cell.font = Font(bold=True)
+    asm_data = data.get("asm_data") or {}
+    _rt_map = {r["shop_ref"]: r.get("ra_tiem_count")
+               for r in data.get("parsed_shop_vt", []) if r.get("shop_ref")}
+    for s in sorted(asm_data.get("all_shops", []),
+                    key=lambda x: x["deposit_count"], reverse=True):
+        ra = _rt_map.get(s["shop_ref"])
+        ws3.append([s["shop_ref"], s["deposit_count"],
+                    "" if ra is None else ra, s["level"], s["sender"]])
+    ws3.column_dimensions["A"].width = 50
+    ws3.column_dimensions["B"].width = 12
+    ws3.column_dimensions["C"].width = 12
+    ws3.column_dimensions["D"].width = 14
+    ws3.column_dimensions["E"].width = 28
+
+    # Sheet 4: TTTC
+    ws4 = wb.create_sheet("TTTC")
+    ws4.append(["Trung tâm", "%HT ngày", "%HOT", "TB bill",
+                "Tỉ trọng HOT", "Lượt KH mua", "ASM"])
+    for cell in ws4[1]:
+        cell.font = Font(bold=True)
+    for r in data.get("parsed_tttc", []):
+        ws4.append([
+            r.get("venue") or "",
+            r.get("revenue_pct")    if r.get("revenue_pct")    is not None else "",
+            r.get("hot_pct")        if r.get("hot_pct")        is not None else "",
+            r.get("tb_bill")        if r.get("tb_bill")        is not None else "",
+            r.get("hot_ratio")      if r.get("hot_ratio")      is not None else "",
+            r.get("customer_count") if r.get("customer_count") is not None else "",
+            r.get("sender") or "",
+        ])
+    ws4.column_dimensions["A"].width = 40
+    for col in ("B", "C", "D", "E", "F"):
+        ws4.column_dimensions[col].width = 14
+    ws4.column_dimensions["G"].width = 28
+
     wb.save(path)
 
 

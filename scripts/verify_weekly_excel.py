@@ -49,7 +49,7 @@ import openpyxl
 wb = openpyxl.load_workbook(path)
 check("sheet 'Tổng hợp tuần' exists", "Tổng hợp tuần" in wb.sheetnames)
 check("sheet 'Nội dung' exists", "Nội dung" in wb.sheetnames)
-check("exactly 2 sheets", len(wb.sheetnames) == 2)
+check("exactly 4 sheets", len(wb.sheetnames) == 4)
 
 ws1 = wb["Tổng hợp tuần"]
 header1 = [c.value for c in ws1[1]]
@@ -75,6 +75,53 @@ check("Nội dung ordered by Giờ gửi asc", rows2[0][1] < rows2[1][1])
 content_cell = ws2.cell(row=2, column=4)
 check("Nội dung column has wrap_text enabled",
       content_cell.alignment is not None and content_cell.alignment.wrap_text is True)
+
+# --- New: structured sheets ---
+SHOP_VT_BODY = pathlib.Path(
+    pathlib.Path(__file__).resolve().parent.parent / "templates/weekend/7"
+).read_text(encoding="utf-8")
+TTTC_BODY = pathlib.Path(
+    pathlib.Path(__file__).resolve().parent.parent / "templates/weekend/1"
+).read_text(encoding="utf-8")
+MIXED_MSGS = [
+    msg("ASM-A", "2026-04-20T02:00:00Z", SHOP_VT_BODY),
+    msg("ASM-B", "2026-04-20T03:00:00Z", TTTC_BODY),
+]
+mixed_data = analyze_weekly(MIXED_MSGS,
+                            [{"displayName": "ASM-A"}, {"displayName": "ASM-B"}],
+                            "2026-04-20")
+import io
+buf = io.BytesIO()
+write_weekly_excel(mixed_data,
+                   [{"displayName": "ASM-A"}, {"displayName": "ASM-B"}],
+                   buf)
+buf.seek(0)
+from openpyxl import load_workbook
+wb = load_workbook(buf)
+check("Shop VT sheet exists",  "Shop VT" in wb.sheetnames)
+check("TTTC sheet exists",     "TTTC"    in wb.sheetnames)
+ws_sv = wb["Shop VT"]
+ws_tt = wb["TTTC"]
+shop_headers = [c.value for c in ws_sv[1]]
+check("Shop VT header Shop",    "Shop"    in shop_headers)
+check("Shop VT header Số cọc",  "Số cọc"  in shop_headers)
+tt_headers = [c.value for c in ws_tt[1]]
+check("TTTC header Trung tâm",   "Trung tâm"   in tt_headers)
+check("TTTC header %HT ngày",    "%HT ngày"    in tt_headers)
+check("TTTC header TB bill",     "TB bill"     in tt_headers)
+check("Shop VT has at least one data row",  ws_sv.max_row >= 2)
+check("TTTC has at least one data row",     ws_tt.max_row >= 2)
+
+# Edge case: zero reports — sheets still exist but empty (headers only)
+empty_data = analyze_weekly([],
+                            [{"displayName": "ASM-A"}],
+                            "2026-04-20")
+buf2 = io.BytesIO()
+write_weekly_excel(empty_data, [{"displayName": "ASM-A"}], buf2)
+buf2.seek(0)
+wb2 = load_workbook(buf2)
+check("zero-day: Shop VT sheet present", "Shop VT" in wb2.sheetnames)
+check("zero-day: TTTC sheet present",    "TTTC"    in wb2.sheetnames)
 
 print(f"\n{FAIL} failure(s)" if FAIL else "\nAll checks passed.")
 pathlib.Path(path).unlink(missing_ok=True)
