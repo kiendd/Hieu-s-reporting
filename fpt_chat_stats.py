@@ -883,6 +883,72 @@ def write_asm_excel(asm_data: dict, path) -> None:
     wb.save(path)
 
 
+def write_weekly_excel(data: dict, group_members: list, path) -> None:
+    """Xuất báo cáo tuần ra .xlsx với 2 sheet: Tổng hợp tuần & Nội dung."""
+    try:
+        import openpyxl
+        from openpyxl.styles import Alignment, Font
+    except ImportError:
+        print("Thiếu 'openpyxl'. Chạy: pip install openpyxl", file=sys.stderr)
+        sys.exit(1)
+
+    wb = openpyxl.Workbook()
+
+    # Sheet 1: Tổng hợp tuần
+    ws1 = wb.active
+    ws1.title = "Tổng hợp tuần"
+    ws1.append(["Người báo cáo", "Trạng thái", "Giờ gửi"])
+
+    reports_by_sender = {r["sender"]: r for r in data["reports"]}
+    member_names = sorted({
+        (m.get("displayName") or "").strip()
+        for m in group_members
+        if (m.get("displayName") or "").strip()
+    })
+
+    def _row_for(name: str):
+        r = reports_by_sender.get(name)
+        if r is None:
+            return (name, "Chưa báo cáo", "")
+        return (name, "Muộn" if r["is_late"] else "Đúng giờ", r["sent_at_vn"])
+
+    rows = [_row_for(n) for n in member_names]
+    status_order = {"Đúng giờ": 0, "Muộn": 1, "Chưa báo cáo": 2}
+    rows.sort(key=lambda r: (status_order[r[1]], r[2] or "ZZ", r[0]))
+    for row in rows:
+        ws1.append(list(row))
+
+    for cell in ws1[1]:
+        cell.font = Font(bold=True)
+    ws1.column_dimensions["A"].width = 28
+    ws1.column_dimensions["B"].width = 14
+    ws1.column_dimensions["C"].width = 10
+
+    # Sheet 2: Nội dung
+    ws2 = wb.create_sheet("Nội dung")
+    ws2.append(["Người báo cáo", "Giờ gửi", "Trạng thái", "Nội dung"])
+    for cell in ws2[1]:
+        cell.font = Font(bold=True)
+
+    for r in sorted(data["reports"], key=lambda r: r["sent_at_vn"]):
+        status = "Muộn" if r["is_late"] else "Đúng giờ"
+        extra = f"\n\n(+{r['extra_count']} tin nhắn khác)" if r["extra_count"] else ""
+        body = r["text"] + extra
+        ws2.append([r["sender"], r["sent_at_vn"], status, body])
+
+    ws2.column_dimensions["A"].width = 28
+    ws2.column_dimensions["B"].width = 10
+    ws2.column_dimensions["C"].width = 12
+    ws2.column_dimensions["D"].width = 100
+
+    for row_idx in range(2, ws2.max_row + 1):
+        ws2.cell(row=row_idx, column=4).alignment = Alignment(
+            wrap_text=True, vertical="top"
+        )
+
+    wb.save(path)
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
