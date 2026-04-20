@@ -1287,7 +1287,7 @@ def write_asm_excel(asm_data: dict, path) -> None:
 
 
 def write_weekly_excel(data: dict, group_members: list, path) -> None:
-    """Xuất báo cáo tuần ra .xlsx với 2 sheet: Tổng hợp tuần & Nội dung."""
+    """Xuất báo cáo tuần ra .xlsx với 4 sheet: Tổng hợp tuần, Nội dung, Shop VT, TTTC."""
     try:
         import openpyxl
         from openpyxl.styles import Alignment, Font
