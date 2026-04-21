@@ -6,7 +6,7 @@ Chạy: streamlit run app.py
 import io
 import json
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 import pandas as pd
 import streamlit as st
@@ -83,6 +83,7 @@ try:
     from fpt_chat_stats import (
         analyze_asm_reports,
         analyze_multiday,
+        analyze_weekly,
         build_session,
         check_asm_compliance,
         check_late_reporters,
@@ -96,6 +97,7 @@ try:
         parse_date_arg,
         to_vn_str,
         write_asm_excel,
+        write_weekly_excel,
     )
 except ImportError as e:
     st.error(f"Không tìm thấy fpt_chat_stats.py: {e}")
@@ -307,13 +309,16 @@ if st.session_state.needs_save:
 st.divider()
 date_mode = st.radio(
     "Khoảng thời gian",
-    ["Hôm nay", "Chọn khoảng ngày"],
+    ["Hôm nay", "Chọn khoảng ngày", "Báo cáo tuần"],
     horizontal=True,
     label_visibility="collapsed",
 )
 use_today = date_mode == "Hôm nay"
+use_weekly = date_mode == "Báo cáo tuần"
 
-if not use_today:
+if use_weekly:
+    weekly_date_input = st.date_input("Ngày báo cáo tuần", value=date.today())
+elif not use_today:
     col1, col2 = st.columns(2)
     with col1:
         date_from_input = st.date_input("Từ ngày", value=date.today())
@@ -329,6 +334,160 @@ run = st.button(
     type="primary",
     use_container_width=True,
 )
+
+def _render_shop_vt_sections(asm_data: dict, d1_shop_map: dict | None = None) -> None:
+    """Render the shop-deposit chart + shop-bucket tables + ideas + highlights.
+
+    Shared by daily (_render_result) and weekly (_render_weekly_result).
+    d1_shop_map is daily-only (D-1 delta comparison); None for weekly.
+    """
+    import pandas as pd  # local import keeps helper self-contained
+
+    # Chart: cọc theo shop
+    all_shops_raw = sorted(asm_data.get("all_shops", []),
+                           key=lambda x: x["deposit_count"], reverse=True)
+    if all_shops_raw:
+        labels = [s["shop_ref"][:28] for s in all_shops_raw]
+        chart_dict = {"Hôm nay": [s["deposit_count"] for s in all_shops_raw]}
+        if d1_shop_map is not None:
+            chart_dict["D-1"] = [d1_shop_map.get(s["shop_ref"], 0) for s in all_shops_raw]
+        st.bar_chart(pd.DataFrame(chart_dict, index=labels), use_container_width=True)
+
+    no_dep = asm_data.get("no_deposit_shops", [])
+    if no_dep:
+        st.subheader("🚫 Shop báo cáo 0 cọc")
+        st.dataframe(
+            [{"ASM": s["sender"], "Shop": s["shop_ref"]} for s in no_dep],
+            use_container_width=True, hide_index=True,
+        )
+
+    low_shops = asm_data.get("low_deposit_shops", [])
+    if low_shops:
+        st.subheader("📉 Shop cọc thấp")
+        def _low_row(s):
+            d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
+            row = {"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
+            if d1 is not None:
+                row["Cọc D-1"] = d1
+            return row
+        st.dataframe(
+            [_low_row(s) for s in sorted(low_shops, key=lambda x: x["deposit_count"])],
+            use_container_width=True, hide_index=True,
+        )
+
+    high_shops = asm_data.get("high_deposit_shops", [])
+    if high_shops:
+        st.subheader("🏆 Nhân viên phát sinh cọc tốt")
+        def _high_row(s):
+            d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
+            row = {"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
+            if d1 is not None:
+                row["Cọc D-1"] = d1
+            return row
+        st.dataframe(
+            [_high_row(s) for s in sorted(high_shops, key=lambda x: x["deposit_count"], reverse=True)],
+            use_container_width=True, hide_index=True,
+        )
+
+    st.subheader("🏪 Shop đặt cọc")
+    all_shops = sorted(asm_data.get("all_shops", []),
+                       key=lambda x: x["deposit_count"], reverse=True)
+    if all_shops:
+        def _shop_row(s):
+            d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
+            row = {"Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
+            if d1 is not None:
+                row["Cọc D-1"] = d1
+            row["Mức"] = s["level"]
+            row["ASM"] = s["sender"]
+            return row
+        st.dataframe(
+            [_shop_row(s) for s in all_shops],
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        st.caption("(không có)")
+
+    st.subheader("💡 Ý tưởng triển khai từ ASM")
+    ideas = asm_data.get("ideas", [])
+    if ideas:
+        st.table(
+            [{"ASM": i["sender"], "Shop": i["shop_ref"], "Nội dung": i["da_lam"]}
+             for i in ideas]
+        )
+    else:
+        st.caption("(không có)")
+
+    st.subheader("⭐ Điểm nổi bật")
+    tich_cuc = asm_data["highlights"]["tich_cuc"]
+    han_che  = asm_data["highlights"]["han_che"]
+    highlights = (
+        [{"ASM": h["sender"], "Shop": h["shop_ref"], "Loại": "Tích cực", "Nội dung": h["content"]}
+         for h in tich_cuc]
+        + [{"ASM": h["sender"], "Shop": h["shop_ref"], "Loại": "Hạn chế", "Nội dung": h["content"]}
+           for h in han_che]
+    )
+    if highlights:
+        st.table(highlights)
+    else:
+        st.caption("(không có)")
+
+
+def _render_tttc_sections(tttc_data: dict) -> None:
+    """Render TTTC aggregate metrics + top/bottom tables + ideas + highlights."""
+
+    def _fmt_pct(v): return f"{v:.1f}%" if v is not None else "—"
+    def _fmt_vnd(v): return f"{v:,}" if v is not None else "—"
+
+    st.subheader("🏥 TTTC — chỉ số trung tâm")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Trung tâm báo cáo", tttc_data["total_reports"])
+    c2.metric("TB bill TB",        _fmt_vnd(tttc_data["avg_tb_bill"]))
+    c3.metric("%HT TB",            _fmt_pct(tttc_data["avg_revenue_pct"]))
+    c4.metric("%HOT TB",           _fmt_pct(tttc_data["avg_hot_pct"]))
+
+    def _center_row(c: dict) -> dict:
+        return {
+            "Trung tâm":     c.get("venue") or "—",
+            "%HT":           _fmt_pct(c.get("revenue_pct")),
+            "%HOT":          _fmt_pct(c.get("hot_pct")),
+            "TB bill":       _fmt_vnd(c.get("tb_bill")),
+            "Tỉ trọng HOT":  _fmt_pct(c.get("hot_ratio")),
+            "Lượt KH mua":   c.get("customer_count") if c.get("customer_count") is not None else "—",
+            "ASM":           c.get("sender") or "—",
+        }
+
+    top = tttc_data.get("top_centers", [])
+    if top:
+        st.subheader("🏆 Top trung tâm (theo %HT)")
+        st.dataframe([_center_row(c) for c in top],
+                     use_container_width=True, hide_index=True)
+
+    bottom = tttc_data.get("bottom_centers", [])
+    if bottom:
+        st.subheader("⚠️ Trung tâm cần chú ý")
+        st.dataframe([_center_row(c) for c in bottom],
+                     use_container_width=True, hide_index=True)
+
+    ideas = tttc_data.get("ideas", [])
+    if ideas:
+        st.subheader("💡 Ý tưởng từ TTTC")
+        st.table([{"ASM": i["sender"], "Trung tâm": i["venue"], "Nội dung": i["da_lam"]}
+                  for i in ideas])
+
+    hl = tttc_data.get("highlights", {})
+    tich_cuc = hl.get("tich_cuc", [])
+    han_che  = hl.get("han_che",  [])
+    if tich_cuc or han_che:
+        st.subheader("⭐ Điểm nổi bật (TTTC)")
+        rows = (
+            [{"ASM": h["sender"], "Trung tâm": h["venue"],
+              "Loại": "Tích cực", "Nội dung": h["content"]} for h in tich_cuc]
+            + [{"ASM": h["sender"], "Trung tâm": h["venue"],
+                "Loại": "Hạn chế", "Nội dung": h["content"]} for h in han_che]
+        )
+        st.table(rows)
+
 
 def _render_result(r: dict) -> None:
     if r.get("error"):
@@ -437,15 +596,6 @@ def _render_result(r: dict) -> None:
             )
         st.divider()
 
-    # ── Chart: cọc theo shop ───────────────────────────────────────────────
-    all_shops_raw = sorted(asm_data.get("all_shops", []), key=lambda x: x["deposit_count"], reverse=True)
-    if all_shops_raw:
-        labels = [s["shop_ref"][:28] for s in all_shops_raw]
-        chart_dict = {"Hôm nay": [s["deposit_count"] for s in all_shops_raw]}
-        if d1_shop_map is not None:
-            chart_dict["D-1"] = [d1_shop_map.get(s["shop_ref"], 0) for s in all_shops_raw]
-        st.bar_chart(pd.DataFrame(chart_dict, index=labels), use_container_width=True)
-
     if unreported_now is not None:
         st.subheader("⏳ Chưa báo cáo đến hiện tại")
         if unreported_now:
@@ -456,42 +606,6 @@ def _render_result(r: dict) -> None:
         else:
             st.success("Tất cả đã báo cáo")
 
-    no_dep = asm_data.get("no_deposit_shops", [])
-    if no_dep:
-        st.subheader("🚫 Shop báo cáo 0 cọc")
-        st.dataframe(
-            [{"ASM": s["sender"], "Shop": s["shop_ref"]} for s in no_dep],
-            use_container_width=True, hide_index=True,
-        )
-
-    low_shops = asm_data.get("low_deposit_shops", [])
-    if low_shops:
-        st.subheader("📉 Shop cọc thấp")
-        def _low_row(s):
-            d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
-            row = {"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
-            if d1 is not None:
-                row["Cọc D-1"] = d1
-            return row
-        st.dataframe(
-            [_low_row(s) for s in sorted(low_shops, key=lambda x: x["deposit_count"])],
-            use_container_width=True, hide_index=True,
-        )
-
-    high_shops = asm_data.get("high_deposit_shops", [])
-    if high_shops:
-        st.subheader("🏆 Nhân viên phát sinh cọc tốt")
-        def _high_row(s):
-            d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
-            row = {"ASM": s["sender"], "Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
-            if d1 is not None:
-                row["Cọc D-1"] = d1
-            return row
-        st.dataframe(
-            [_high_row(s) for s in sorted(high_shops, key=lambda x: x["deposit_count"], reverse=True)],
-            use_container_width=True, hide_index=True,
-        )
-
     if late_reporters:
         st.subheader("🕐 ASM báo cáo muộn")
         st.dataframe(
@@ -499,47 +613,7 @@ def _render_result(r: dict) -> None:
             use_container_width=True, hide_index=True,
         )
 
-    st.subheader("🏪 Shop đặt cọc")
-    all_shops = sorted(asm_data.get("all_shops", []), key=lambda x: x["deposit_count"], reverse=True)
-    if all_shops:
-        def _shop_row(s):
-            d1 = d1_shop_map.get(s["shop_ref"], "—") if d1_shop_map is not None else None
-            row = {"Shop": s["shop_ref"], "Số cọc": s["deposit_count"]}
-            if d1 is not None:
-                row["Cọc D-1"] = d1
-            row["Mức"] = s["level"]
-            row["ASM"] = s["sender"]
-            return row
-        st.dataframe(
-            [_shop_row(s) for s in all_shops],
-            use_container_width=True, hide_index=True,
-        )
-    else:
-        st.caption("(không có)")
-
-    st.subheader("💡 Ý tưởng triển khai từ ASM")
-    ideas = asm_data.get("ideas", [])
-    if ideas:
-        st.table(
-            [{"ASM": i["sender"], "Shop": i["shop_ref"], "Nội dung": i["da_lam"]}
-             for i in ideas]
-        )
-    else:
-        st.caption("(không có)")
-
-    st.subheader("⭐ Điểm nổi bật")
-    tich_cuc = asm_data["highlights"]["tich_cuc"]
-    han_che  = asm_data["highlights"]["han_che"]
-    highlights = (
-        [{"ASM": h["sender"], "Shop": h["shop_ref"], "Loại": "Tích cực", "Nội dung": h["content"]}
-         for h in tich_cuc]
-        + [{"ASM": h["sender"], "Shop": h["shop_ref"], "Loại": "Hạn chế", "Nội dung": h["content"]}
-           for h in han_che]
-    )
-    if highlights:
-        st.table(highlights)
-    else:
-        st.caption("(không có)")
+    _render_shop_vt_sections(asm_data, d1_shop_map=d1_shop_map)
 
     missing = asm_data.get("missing_reporters")
     if missing is not None and r.get("past_deadline"):
@@ -595,6 +669,151 @@ def _render_result(r: dict) -> None:
                     st.divider()
 
 
+def _render_weekly_result(r: dict) -> None:
+    if r.get("error"):
+        st.error(f"Lỗi: {r['error']}")
+        return
+
+    wd = r["weekly_data"]
+    target_date = r["target_date"]
+    group_id = r["group_id"]
+    short_id = group_id[-8:] if len(group_id) >= 8 else group_id
+
+    reports  = wd["reports"]
+    late     = wd["late_list"]
+    missing  = wd["missing_list"]
+    total_members = len(reports) + len(missing)
+    rate = (len(reports) / total_members * 100.0) if total_members else 0.0
+
+    # Avatar lookup keyed by displayName. Try a few common field names since the
+    # FPT Chat members endpoint shape isn't fully documented.
+    def _avatar_of(member: dict) -> str:
+        for key in ("avatarUrl", "avatar", "imageUrl", "photoUrl"):
+            v = member.get(key)
+            if isinstance(v, str) and v.startswith("http"):
+                return v
+        return ""
+
+    avatar_map: dict[str, str] = {
+        (m.get("displayName") or "").strip(): _avatar_of(m)
+        for m in (r.get("members") or [])
+        if (m.get("displayName") or "").strip()
+    }
+
+    # ── 1. Compliance header ──────────────────────────────────────────────────
+    col_hdr, col_dl = st.columns([4, 1])
+    with col_hdr:
+        st.subheader(f"Báo cáo tuần — {target_date}")
+    with col_dl:
+        st.download_button(
+            label="⬇️ Tải Excel",
+            data=r["excel_buf"],
+            file_name=f"bao_cao_tuan_{short_id}_{target_date}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key=f"dl_weekly_{group_id}",
+        )
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Đã báo cáo", len(reports), delta=f"{len(reports)}/{total_members}" if total_members else None, delta_color="off")
+    m2.metric("Muộn", len(late))
+    m3.metric("Chưa báo cáo", len(missing))
+    m4.metric("Tỉ lệ báo cáo", f"{rate:.1f}%")
+
+    st.progress(
+        rate / 100.0 if total_members else 0.0,
+        text=f"{len(reports)}/{total_members} ASM đã gửi (kèm muộn)",
+    )
+
+    # ── 2. Action items ───────────────────────────────────────────────────────
+    late_map = {rr["sender"]: rr["sent_at_vn"] for rr in reports if rr["is_late"]}
+    col_missing, col_late = st.columns(2)
+    with col_missing:
+        with st.container(border=True):
+            st.markdown(f"**🔴 Chưa báo cáo ({len(missing)})**")
+            if missing:
+                st.code("\n".join(f"🔴 {n}" for n in missing), language=None)
+            else:
+                st.caption("Không có — toàn bộ ASM đã báo cáo.")
+    with col_late:
+        with st.container(border=True):
+            st.markdown(f"**🟡 Muộn ({len(late)})**")
+            if late:
+                st.code(
+                    "\n".join(f"🟡 {n} ({late_map.get(n, '?')})" for n in late),
+                    language=None,
+                )
+            else:
+                st.caption("Không có — tất cả ASM đã báo cáo gửi đúng giờ.")
+
+    # ── 2b. Shop VT + TTTC aggregate sections ────────────────────────────────
+    asm_data_w  = wd.get("asm_data")
+    tttc_data_w = wd.get("tttc_data")
+
+    if asm_data_w:
+        st.markdown("### 🏪 Shop VT")
+        _render_shop_vt_sections(asm_data_w, d1_shop_map=None)
+
+    if tttc_data_w:
+        _render_tttc_sections(tttc_data_w)
+
+    # ── 3. Nội dung báo cáo (search + tabs + expanders) ───────────────────────
+    st.divider()
+    st.markdown("**Nội dung báo cáo**")
+    query = st.text_input(
+        "Tìm ASM…",
+        key=f"weekly_search_{group_id}",
+        placeholder="Nhập tên ASM để lọc",
+        label_visibility="collapsed",
+    )
+    q = (query or "").strip().lower()
+
+    def _match(rr: dict) -> bool:
+        return not q or q in rr["sender"].lower()
+
+    filtered_all      = [rr for rr in reports if _match(rr)]
+    filtered_on_time  = [rr for rr in filtered_all if not rr["is_late"]]
+    filtered_late     = [rr for rr in filtered_all if rr["is_late"]]
+
+    def _render_list(items: list) -> None:
+        if not items:
+            st.info("Không có báo cáo khớp.")
+            return
+        for rr in items:
+            badge  = "🟡" if rr["is_late"] else "🟢"
+            status = "Muộn" if rr["is_late"] else "Đúng giờ"
+            extra  = f" · (+{rr['extra_count']} tin nhắn khác)" if rr["extra_count"] else ""
+            header = f"{badge} {rr['sender']} — {rr['sent_at_vn']} ({status}){extra}"
+            url = avatar_map.get(rr["sender"], "")
+            col_av, col_body = st.columns([1, 12], vertical_alignment="center")
+            with col_av:
+                if url:
+                    st.image(url, width=40)
+                else:
+                    st.markdown(
+                        f"<div style='width:40px;height:40px;border-radius:50%;"
+                        f"background:#e3e3e3;display:flex;align-items:center;"
+                        f"justify-content:center;font-weight:600;color:#555;'>"
+                        f"{(rr['sender'][:1] or '?').upper()}</div>",
+                        unsafe_allow_html=True,
+                    )
+            with col_body:
+                with st.expander(header, expanded=False):
+                    st.text(rr["text"])
+
+    tab_all, tab_ontime, tab_late = st.tabs([
+        f"Tất cả ({len(filtered_all)})",
+        f"Đã báo cáo đúng giờ ({len(filtered_on_time)})",
+        f"Muộn ({len(filtered_late)})",
+    ])
+    with tab_all:
+        _render_list(filtered_all)
+    with tab_ontime:
+        _render_list(filtered_on_time)
+    with tab_late:
+        _render_list(filtered_late)
+
+
 if run:
     if not token:
         st.error("Vui lòng nhập Token.")
@@ -604,6 +823,77 @@ if run:
         st.stop()
 
     _ls_set("fpt_token", token)
+
+    if not use_weekly:
+        # clear any stale weekly results when running daily/multi-day
+        st.session_state["_weekly_results"] = []
+
+    # ── Weekly mode: dispatch cho từng group, render trực tiếp, return sớm ──
+    if use_weekly:
+        VN_OFFSET = 7 * 3600
+        weekly_target_str = weekly_date_input.strftime("%Y-%m-%d")
+        weekly_results = []
+        for entry in selected_groups:
+            group_id = extract_group_id(entry["url"])
+            cfg = entry["config"]
+            with st.status(f"Đang xử lý {entry['label']}…", expanded=False) as status:
+                try:
+                    session = build_session(token)
+                    group_info = fetch_group_info(session, "https://api-chat.fpt.com", group_id)
+                    tab_label = entry["label"]
+                    if tab_label == group_id[-8:]:
+                        api_name = group_info.get("name") or group_info.get("title") or ""
+                        if api_name:
+                            tab_label = api_name
+
+                    # Half-open VN-day window [target 00:00+07, target+1 00:00+07)
+                    vn_start_utc = datetime.combine(
+                        weekly_date_input, time(0, 0), tzinfo=timezone.utc
+                    ) - timedelta(hours=7)
+                    vn_end_utc = vn_start_utc + timedelta(days=1)
+
+                    messages = fetch_all_messages(
+                        token=token, group_id=group_id, date_from=vn_start_utc,
+                    )
+                    messages = filter_by_date(
+                        messages, vn_start_utc, vn_end_utc - timedelta(microseconds=1),
+                    )
+
+                    members = fetch_group_members(session, "https://api-chat.fpt.com", group_id)
+                    if not members:
+                        raise RuntimeError(
+                            "fetch_group_members trả rỗng hoặc lỗi — không thể kiểm tra compliance."
+                        )
+
+                    weekly_data = analyze_weekly(
+                        messages, members, weekly_target_str, deadline=cfg["deadline"],
+                    )
+
+                    excel_buf = io.BytesIO()
+                    write_weekly_excel(weekly_data, members, excel_buf)
+                    excel_buf.seek(0)
+
+                    status.update(label=f"✓ {tab_label}", state="complete")
+                    weekly_results.append({
+                        "tab_label": tab_label,
+                        "group_id": group_id,
+                        "target_date": weekly_target_str,
+                        "weekly_data": weekly_data,
+                        "members": members,
+                        "excel_buf": excel_buf,
+                        "error": None,
+                    })
+                except Exception as exc:
+                    status.update(label=f"✗ {entry['label']}", state="error")
+                    weekly_results.append({
+                        "tab_label": entry["label"],
+                        "group_id": group_id,
+                        "error": str(exc),
+                    })
+
+        st.session_state["_weekly_results"] = weekly_results
+        st.session_state["_results"] = []  # clear daily results to avoid mixing views
+        st.rerun()  # trigger rerun so the render block below picks up the new results
 
     # Tính date range
     import time as _time
@@ -623,7 +913,6 @@ if run:
     # D-1 chỉ khi single-day
     _is_single_day = date_from_str == date_to_str
     if _is_single_day:
-        from datetime import timedelta
         _d1_str   = (datetime.strptime(date_from_str, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
         _d1_from  = parse_date_arg(_d1_str, end_of_day=False)
         _d1_to    = parse_date_arg(_d1_str, end_of_day=True)
@@ -752,6 +1041,17 @@ if run:
 
 
 # ── Render kết quả (ngoài if run để giữ kết quả qua các rerun) ────────────────
+_cached_weekly = st.session_state.get("_weekly_results", [])
+if _cached_weekly:
+    st.divider()
+    if len(_cached_weekly) == 1:
+        _render_weekly_result(_cached_weekly[0])
+    else:
+        _tabs = st.tabs([r["tab_label"] for r in _cached_weekly])
+        for tab, result in zip(_tabs, _cached_weekly):
+            with tab:
+                _render_weekly_result(result)
+
 _cached_results = st.session_state.get("_results", [])
 if _cached_results:
     st.divider()

@@ -215,6 +215,70 @@ def fetch_all_messages(token: str, group_id: str,
 
 
 # ---------------------------------------------------------------------------
+# Weekly Report Classifier
+# ---------------------------------------------------------------------------
+
+WEEKLY_SCORE_THRESHOLD = 3
+WEEKLY_MIN_LENGTH = 150
+
+_WEEKLY_RE_UNIT = re.compile(
+    r"\b(tttc|vx\s|shop\b|trung\s*tâm|chi\s*nhánh|lc\s+hcm)",
+    re.IGNORECASE,
+)
+_WEEKLY_RE_METRIC = re.compile(
+    r"\d+\s*%|\d+(?:\.\d+)?\s*(tr|triệu|m\b|k\b|đ\b|cọc|bill|khách|lượt|gói)",
+    re.IGNORECASE,
+)
+_WEEKLY_RE_OPEN_CLOSE = re.compile(
+    r"(đánh\s*giá|báo\s*cáo|em\s+(?:xin\s+)?cảm\s*ơn|dạ\s+em\s+(?:gửi|bc))",
+    re.IGNORECASE,
+)
+_WEEKLY_RE_SECTION = re.compile(
+    r"(?m)^\s*[-–•\d\.]*\s*(kết\s*quả|tích\s*cực|vấn\s*đề|đã\s*làm|ngày\s*mai"
+    r"|giải\s*pháp|hành\s*động|tổng\s*quan|phân\s*tích)\s*[:：]",
+    re.IGNORECASE,
+)
+
+
+def _score_weekly_message(content: str) -> int:
+    """Tính điểm phân loại báo cáo tuần (0..6) cho một đoạn text."""
+    if not content:
+        return 0
+    flags = (
+        len(content.strip()) >= WEEKLY_MIN_LENGTH,
+        "\n" in content,
+        bool(_WEEKLY_RE_UNIT.search(content)),
+        bool(_WEEKLY_RE_METRIC.search(content)),
+        bool(_WEEKLY_RE_OPEN_CLOSE.search(content)),
+        bool(_WEEKLY_RE_SECTION.search(content)),
+    )
+    return sum(1 for f in flags if f)
+
+
+_CLASSIFY_RE_COC = re.compile(r"\d+\s*cọc|cọc\s*\d+(?!\d)(?!\s*đ)", re.IGNORECASE)
+_CLASSIFY_RE_TTTC = re.compile(
+    r"\bTTTC\b|TB\s*[Bb]ill|%\s*HT|doanh\s*thu",
+    re.IGNORECASE,
+)
+
+
+def classify_report(content: str) -> str:
+    """Phân loại loại báo cáo: 'shop_vt' | 'tttc' | 'unknown'.
+
+    Dấu hiệu Shop VT mạnh nhất là "N cọc" — có thì trả shop_vt luôn.
+    Nếu không có cọc nhưng có dấu hiệu TTTC (TTTC / TB bill / %HT / doanh thu)
+    thì là tttc. Còn lại → unknown.
+    """
+    if not content:
+        return "unknown"
+    if _CLASSIFY_RE_COC.search(content):
+        return "shop_vt"
+    if _CLASSIFY_RE_TTTC.search(content):
+        return "tttc"
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
 # ASM Report Analysis
 # ---------------------------------------------------------------------------
 
@@ -231,17 +295,95 @@ def detect_asm_reports(messages: list) -> list:
     return result
 
 
+def _parse_vnd_amount(raw: str, unit_suffix: str | None) -> int | None:
+    """Normalize a Vietnamese-formatted amount string to an integer VND.
+
+    Rules (in order):
+      1. If unit_suffix ∈ {"tr", "M", "triệu"}: scale = 1_000_000.
+         - `,` or `.` followed by 1-3 digits → decimal part.
+         - e.g. "2,2" + "tr" → 2_200_000; "1.625" + "tr" → 1_625_000.
+      2. Without a unit suffix: both `,` and `.` are thousand separators.
+         - e.g. "134.927.000" → 134_927_000; "1.625,000" → 1_625_000.
+      3. If the input is unresolvable (fractional without unit, non-numeric, empty): return None.
+    """
+    if not raw:
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+
+    if unit_suffix in ("tr", "M", "triệu"):
+        # allow one decimal separator of 1-3 digits
+        m = re.fullmatch(r"(\d+)(?:[.,](\d{1,3}))?", s)
+        if not m:
+            return None
+        whole = int(m.group(1))
+        frac  = m.group(2)
+        if frac is None:
+            return whole * 1_000_000
+        # "2,2" → 2.2M; "1.625" → 1.625M
+        scaled = whole * 1_000_000 + int(frac) * (10 ** (6 - len(frac)))
+        return scaled
+
+    # No unit: both . and , are thousand separators
+    if not re.fullmatch(r"\d+(?:[.,]\d+)*", s):
+        return None
+    # Reject if any group after the first has != 3 digits
+    digits_only = re.sub(r"[.,]", "", s)
+    # Require that removing separators leaves pure digits and that each
+    # separated group after the first is exactly 3 digits (thousand grouping).
+    groups = re.split(r"[.,]", s)
+    if len(groups) > 1 and any(len(g) != 3 for g in groups[1:]):
+        return None
+    try:
+        return int(digits_only)
+    except ValueError:
+        return None
+
+
 def _extract_sections(content: str) -> dict:
-    """Trích xuất các mục báo cáo theo pattern '- Label: content'."""
-    sections = {}
-    pattern = re.compile(
-        r'[-–•]\s*([^:\n]+?)\s*[:：]\s*(.*?)(?=\n\s*[-–•]|\Z)',
-        re.DOTALL,
+    """Trích các mục báo cáo. Hỗ trợ 3 dạng nhãn:
+      - '- Label: content' (bullet)
+      - 'Label: content' (bare, Label bắt đầu bằng chữ cái — hoa hoặc thường)
+      - 'N. Label:' (numbered heading, nội dung nằm ở các bullet theo sau)
+    Trả về dict { label_lower: text } gộp các dòng cho đến nhãn tiếp theo.
+    """
+    # A label-start line is any of:
+    #   - optional `[-–•]` or `N.` prefix
+    #   - followed by a label (2-40 chars, starts with a letter, no ':')
+    #   - followed by ':' or '：'
+    label_re = re.compile(
+        r"""^[ \t]*                              # leading ws
+            (?:[-–•]|\d+\.)?[ \t]*               # optional bullet / number
+            (?P<label>[A-ZÀ-Ỵa-zà-ỵ][^\n:：]{1,40}?)
+            [ \t]*[:：](?!//)[ \t]*              # colon, NOT followed by // (reject URLs)
+            (?P<rest>.*)$                        # same-line content (may be empty)
+        """,
+        re.VERBOSE,
     )
-    for m in pattern.finditer(content):
-        label = m.group(1).strip().lower()
-        text = m.group(2).strip()
-        sections[label] = text
+
+    sections: dict[str, str] = {}
+    current_label: str | None = None
+    current_buf: list[str] = []
+
+    def flush():
+        nonlocal current_label, current_buf
+        if current_label is not None:
+            sections[current_label] = "\n".join(current_buf).strip()
+        current_label = None
+        current_buf = []
+
+    for line in content.splitlines():
+        m = label_re.match(line)
+        if m:
+            flush()
+            current_label = m.group("label").strip().lower()
+            rest = m.group("rest").strip()
+            current_buf = [rest] if rest else []
+        else:
+            if current_label is not None:
+                current_buf.append(line)
+    flush()
     return sections
 
 
@@ -283,6 +425,180 @@ def parse_asm_report(msg: dict) -> dict:
         "sender": user.get("displayName", "Unknown"),
         "sender_id": user.get("id", ""),
         "sent_at": msg.get("createdAt", ""),
+        "message_id": msg.get("id", ""),
+    }
+
+
+# ---------------------------------------------------------------------------
+# TTTC Parser (weekly report — weekend shape)
+# ---------------------------------------------------------------------------
+
+# TTTC/VX/LC: not followed by "(" — excludes report-type headers like "TTTC (Thứ 7...)".
+# shop: any content on the same line.
+_TTTC_VENUE_RE = re.compile(
+    r"(?:"
+    r"(TTTC|VX|LC)\s*[:\-]?\s*(?!\s*\()([^\n]+)"   # TTTC/VX/LC not followed by "("
+    r"|shop\s*[:\-]?\s*([^\n]+)"                      # shop: anything
+    r")",
+    re.IGNORECASE,
+)
+
+# Revenue %: require strong context (DT/DS abbreviation, MTD qualifier, center-level phrasing)
+# to avoid matching individual TVV metrics deep in body text.
+_TTTC_REVENUE_PCT_RE = re.compile(
+    r"(?:"
+    r"DT(?!\s*HOT)\b[^%\n]{0,50}?HT\s*:"            # DT … HT: 133%
+    r"|DS\s*T[oổ]ng\b"                                # DS Tổng về 143%
+    r"|%HT\s*ng[àa]y"                                 # %HT ngày: 145%
+    r"|Doanh\s*thu\s*(?:MTD|trong\s*ng[àa]y|ng[àa]y\s*đ[aạ]t)"  # Doanh thu MTD / ngày đạt
+    r"|Trung\s*t[âa]m\s*v[eề]"                       # Trung tâm về 83%
+    r")"
+    r"[^%\n]{0,60}?(\d[\d.,]*)\s*%",
+    re.IGNORECASE,
+)
+
+# HOT achievement %: DT HOT / DS Hot / "Hot đạt|về" at line-start (after optional non-word chars).
+# Bare \bHot\b intentionally removed to avoid false positives in "tỷ trọng HOT",
+# "kèm hot" and similar ratio/narrative contexts.
+_TTTC_HOT_PCT_RE = re.compile(
+    r"(?:"
+    r"DT\s*HOT"                          # DT HOT … 133%
+    r"|DS\s*Hot"                          # DS Hot về 215%
+    r"|(?m:^[^\w\n]*Hot\s+(?:đạt|về)\b)" # Hot đạt / Hot về at line start
+    r")"
+    r"[^%\n]{0,40}?(\d[\d.,]*)\s*%",
+    re.IGNORECASE,
+)
+
+# HOT ratio (tỷ trọng HOT or Doanh thu HH — same concept, different notations).
+# The [^%\n]{0,20}? inside tỷ trọng arm handles "DT" / "doanh thu" inserts between
+# "trọng" and "HOT" (e.g. "Tỉ trọng DT HOT: 51%").
+_TTTC_HOT_RATIO_RE = re.compile(
+    r"(?:"
+    r"[Tt][ỉỷi]\s*tr[oọ]ng[^%\n]{0,20}?HOT"  # Tỷ/Tỉ trọng … HOT (any qualifier)
+    r"|[Dd]oanh\s*thu\s*HH"                    # Doanh thu HH (W8 notation)
+    r"|DT\s*HH"                                 # DT HH shorthand
+    r")"
+    r"[^%\n]{0,15}?(\d[\d.,]*)\s*%",
+    re.IGNORECASE,
+)
+
+_TTTC_TB_BILL_VALUE_RE = re.compile(
+    r"(?:TB\s*[Bb]ill|[Gg]i[aá]\s*tr[iị]\s*bill)[^\d]*([\d.,]+)\s*(tr|M|tri[eệ]u)?",
+    re.IGNORECASE,
+)
+_TTTC_CUSTOMER_RE = re.compile(
+    r"(?:[Ll][ưượ][oợ]t\s*)?(?:KH|kh[aá]ch)\s*mua[^\d]*(\d+)",
+)
+
+# Boundary markers that signal the start of per-TVV narrative sections.
+# Metric searches are restricted to content BEFORE this boundary to avoid
+# capturing individual TVV stats as center-level metrics.
+_TTTC_NARRATIVE_BOUNDARY_RE = re.compile(
+    r"\n[^\n]*(?:t[íi]ch\s*c[ựu]c|v[aấ]n\s*đ[eề]|đi[eể]m\s*s[áa]ng"
+    r"|b[aạ]n\s*tvv|ph[aâ]n\s*t[íi]ch)",
+    re.IGNORECASE,
+)
+
+
+def _first_n_lines(content: str, n: int = 3) -> str:
+    """Return the first n non-empty lines joined by newline."""
+    out = []
+    for line in content.splitlines():
+        if line.strip():
+            out.append(line)
+            if len(out) >= n:
+                break
+    return "\n".join(out)
+
+
+def _to_pct(raw: str) -> float | None:
+    """Parse '145' / '128,18' / '133.5' → float percentage, else None."""
+    if not raw:
+        return None
+    s = raw.strip().replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _tttc_metrics_area(content: str) -> str:
+    """Return the part of content safe for metric extraction.
+
+    Cuts off before per-TVV narrative sections (Tích cực / Vấn đề / Bạn TVV /
+    Phân tích) to prevent individual-TVV metrics from being captured as
+    center-level metrics.  If no such boundary is found the full content is
+    returned (covers flat-narrative templates like W4 and W6).
+    """
+    m = _TTTC_NARRATIVE_BOUNDARY_RE.search(content)
+    if m:
+        return content[:m.start()]
+    return content
+
+
+def parse_tttc_report(msg: dict) -> dict:
+    """Parse một báo cáo TTTC (weekend). Các field metric đều nullable."""
+    content = msg.get("content") or ""
+    user = msg.get("user") or {}
+
+    # Venue: restrict to first 3 non-empty lines to avoid body-text mentions
+    header = _first_n_lines(content, 3)
+    vm = _TTTC_VENUE_RE.search(header)
+    venue = None
+    if vm:
+        # Group 1: TTTC/VX/LC keyword; Group 2: venue after it; Group 3: shop name
+        type_prefix = (vm.group(1) or "shop").strip()
+        name_part = (vm.group(2) or vm.group(3) or "").strip()
+        venue = (type_prefix + " " + name_part).strip()
+
+    # All metric searches operate on the "safe" area before TVV narratives
+    area = _tttc_metrics_area(content)
+
+    rm = _TTTC_REVENUE_PCT_RE.search(area)
+    revenue_pct = _to_pct(rm.group(1)) if rm else None
+
+    hm = _TTTC_HOT_PCT_RE.search(area)
+    hot_pct = _to_pct(hm.group(1)) if hm else None
+
+    hrm = _TTTC_HOT_RATIO_RE.search(area)
+    hot_ratio = _to_pct(hrm.group(1)) if hrm else None
+
+    tb_bill = None
+    tbm = _TTTC_TB_BILL_VALUE_RE.search(area)
+    if tbm:
+        raw_val, unit = tbm.group(1), tbm.group(2)
+        if unit is None and re.match(r'^\d+[.,]\d{1,2}$', raw_val):
+            # "2.2" / "2,3" without explicit unit → implicit millions
+            unit = "M"
+        tb_bill = _parse_vnd_amount(raw_val, unit)
+
+    cm = _TTTC_CUSTOMER_RE.search(area)
+    customer_count = int(cm.group(1)) if cm else None
+
+    sections = _extract_sections(content)
+
+    def get_section(*needles):
+        for needle in needles:
+            for key, val in sections.items():
+                if needle in key:
+                    return val
+        return None
+
+    return {
+        "venue":           venue,
+        "revenue_pct":     revenue_pct,
+        "hot_pct":         hot_pct,
+        "hot_ratio":       hot_ratio,
+        "tb_bill":         tb_bill,
+        "customer_count":  customer_count,
+        "tich_cuc":   get_section("tích cực"),
+        "van_de":     get_section("vấn đề"),
+        "da_lam":     get_section("đã làm"),
+        "giai_phap":  get_section("giải pháp"),
+        "sender":     user.get("displayName", "Unknown"),
+        "sender_id":  user.get("id", ""),
+        "sent_at":    msg.get("createdAt", ""),
         "message_id": msg.get("id", ""),
     }
 
@@ -345,6 +661,68 @@ def analyze_asm_reports(parsed_reports: list,
         "ideas":             ideas,
         "highlights":        {"tich_cuc": tich_cuc_list, "han_che": han_che_list},
         "missing_reporters": None,  # None = chưa kiểm tra; [] = tất cả đã báo cáo
+    }
+
+
+def analyze_tttc_reports(parsed: list) -> dict:
+    """Tổng hợp các TTTC report đã parse. Mọi tỉ số chỉ tính trên non-null."""
+    def _mean(xs):
+        xs = [x for x in xs if x is not None]
+        if not xs:
+            return None
+        return sum(xs) / len(xs)
+
+    avg_tb_bill = _mean([r["tb_bill"] for r in parsed])
+    if avg_tb_bill is not None:
+        avg_tb_bill = int(round(avg_tb_bill))
+
+    avg_revenue_pct = _mean([r["revenue_pct"] for r in parsed])
+    avg_hot_pct     = _mean([r["hot_pct"]     for r in parsed])
+    avg_hot_ratio   = _mean([r["hot_ratio"]   for r in parsed])
+
+    # Nulls-last stable sort
+    def _sort_top(r):
+        v = r["revenue_pct"]
+        return (v is None, -(v or 0))
+
+    def _sort_bottom(r):
+        v = r["revenue_pct"]
+        return (v is None, (v or 0))
+
+    # Shallow-copy so downstream mutation doesn't alias back into parsed_tttc.
+    top    = [{**r} for r in sorted(parsed, key=_sort_top)[:5]]
+    bottom = [{**r} for r in sorted(parsed, key=_sort_bottom)[:5]]
+
+    ideas = [
+        {"sender": r["sender"], "venue": r["venue"],
+         "da_lam": r["da_lam"], "sent_at": r.get("sent_at", "")}
+        for r in parsed
+        if r.get("da_lam")
+    ]
+    tich_cuc = [
+        {"sender": r["sender"], "venue": r["venue"], "content": r["tich_cuc"]}
+        for r in parsed
+        if r.get("tich_cuc")
+    ]
+    han_che = [
+        {"sender": r["sender"], "venue": r["venue"], "content": r["van_de"]}
+        for r in parsed
+        if r.get("van_de")
+    ]
+
+    return {
+        "total_reports":   len(parsed),
+        "avg_tb_bill":     avg_tb_bill,
+        "avg_revenue_pct": avg_revenue_pct,
+        "avg_hot_pct":     avg_hot_pct,
+        "avg_hot_ratio":   avg_hot_ratio,
+        "top_centers":     top,
+        "bottom_centers":  bottom,
+        "ideas":           ideas,
+        "highlights": {
+            "tich_cuc": tich_cuc,
+            "han_che":  han_che,
+        },
     }
 
 
@@ -542,6 +920,100 @@ def analyze_multiday(parsed_reports: list, date_from_str: str, date_to_str: str)
     }
 
 
+def analyze_weekly(messages: list,
+                   group_members: list,
+                   target_date_vn: str,
+                   deadline: str = "20:00") -> dict:
+    """Báo cáo tuần một ngày: phân loại tin nhắn, tìm muộn/thiếu, dump text."""
+    VN_OFFSET = 7 * 3600
+    target = datetime.strptime(target_date_vn, "%Y-%m-%d").date()
+    dl_h, dl_m = [int(x) for x in deadline.split(":", 1)]
+    deadline_time = time(hour=dl_h, minute=dl_m)
+
+    member_names = sorted({
+        (m.get("displayName") or "").strip()
+        for m in group_members
+        if (m.get("displayName") or "").strip()
+    })
+    member_set = set(member_names)
+
+    # Group qualifying messages by sender
+    by_sender: dict[str, list] = {}
+    for msg in messages:
+        if msg.get("type") != "TEXT":
+            continue
+        content = msg.get("content") or ""
+        if not content.strip():
+            continue
+        user = msg.get("user") or {}
+        sender = (user.get("displayName") or "").strip()
+        if sender not in member_set:
+            continue
+        dt = parse_dt(msg.get("createdAt", ""))
+        if not dt:
+            continue
+        vn_dt = datetime.fromtimestamp(dt.timestamp() + VN_OFFSET, tz=timezone.utc)
+        if vn_dt.date() != target:
+            continue
+        if _score_weekly_message(content) < WEEKLY_SCORE_THRESHOLD:
+            continue
+        by_sender.setdefault(sender, []).append((dt, vn_dt, content))
+
+    reports = []
+    for sender, items in by_sender.items():
+        items.sort(key=lambda t: t[0])
+        _, vn_dt, content = items[0]
+        is_late = vn_dt.time() >= deadline_time
+        reports.append({
+            "sender": sender,
+            "sent_at_vn": vn_dt.strftime("%H:%M"),
+            "is_late": is_late,
+            "text": content,
+            "extra_count": len(items) - 1,
+        })
+    reports.sort(key=lambda r: r["sent_at_vn"])
+
+    late_list = sorted(r["sender"] for r in reports if r["is_late"])
+    reporters = {r["sender"] for r in reports}
+    missing_list = sorted(n for n in member_names if n not in reporters)
+
+    # --- Structured dispatch: parse each qualifying message by kind ---
+    parsed_shop_vt: list[dict] = []
+    parsed_tttc:    list[dict] = []
+    for sender, items in by_sender.items():
+        for dt, _vn_dt, content in items:
+            # Reconstruct a minimal msg dict for the parsers.
+            # Use the per-message dt so each fake_msg gets a unique id.
+            fake_msg = {
+                "content":   content,
+                "user":      {"displayName": sender, "id": ""},
+                "createdAt": dt.isoformat(),
+                "id":        f"{sender}-{dt.timestamp()}",
+                "type":      "TEXT",
+            }
+            kind = classify_report(content)
+            if kind == "shop_vt":
+                parsed_shop_vt.append(parse_asm_report(fake_msg))
+            elif kind == "tttc":
+                parsed_tttc.append(parse_tttc_report(fake_msg))
+            # unknown → dropped from structured pipelines, still in reports[]
+
+    asm_data  = analyze_asm_reports(parsed_shop_vt) if parsed_shop_vt else None
+    tttc_data = analyze_tttc_reports(parsed_tttc)   if parsed_tttc    else None
+
+    return {
+        "target_date":    target_date_vn,
+        "deadline":       deadline,
+        "reports":        reports,
+        "late_list":      late_list,
+        "missing_list":   missing_list,
+        "asm_data":       asm_data,
+        "tttc_data":      tttc_data,
+        "parsed_shop_vt": parsed_shop_vt,
+        "parsed_tttc":    parsed_tttc,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Report Output
 # ---------------------------------------------------------------------------
@@ -618,6 +1090,85 @@ def print_asm_report(asm_data: dict,
             print("  Tất cả ASM đã báo cáo")
 
     print(f"\n{sep}")
+
+
+def print_weekly_report(data: dict) -> None:
+    """In báo cáo tuần một ngày ra stdout."""
+    target = data["target_date"]
+    deadline = data["deadline"]
+    reports = data["reports"]
+    late_list = data["late_list"]
+    missing_list = data["missing_list"]
+
+    sep = "=" * 65
+    print(sep)
+    print(f"  BÁO CÁO TUẦN — {target}")
+    print(sep)
+    print(f"  Deadline: {deadline}")
+    print(f"  Đã báo cáo: {len(reports)}")
+    print(f"  Muộn: {len(late_list)}")
+    print(f"  Chưa báo cáo: {len(missing_list)}")
+    print()
+
+    if missing_list:
+        print(f"--- Chưa báo cáo ({len(missing_list)}) ---")
+        for name in missing_list:
+            print(f"  - {name}")
+        print()
+
+    if late_list:
+        print(f"--- Muộn ({len(late_list)}) ---")
+        late_map = {r["sender"]: r["sent_at_vn"] for r in reports if r["is_late"]}
+        for name in late_list:
+            print(f"  - {name} ({late_map.get(name, '?')})")
+        print()
+
+    asm_data  = data.get("asm_data")
+    tttc_data = data.get("tttc_data")
+
+    if asm_data:
+        print(f"--- Shop VT: tổng cọc {asm_data['total_deposits']}, "
+              f"tổng ra tiêm {asm_data['total_ra_tiem']} ---")
+        low  = asm_data.get("low_deposit_shops", [])
+        high = asm_data.get("high_deposit_shops", [])
+        if low:
+            print(f"  Shop cọc thấp ({len(low)}):")
+            for s in low:
+                print(f"    - {s['shop_ref']} — {s['deposit_count']} cọc ({s['sender']})")
+        if high:
+            print(f"  Shop cọc tốt ({len(high)}):")
+            for s in high:
+                print(f"    - {s['shop_ref']} — {s['deposit_count']} cọc ({s['sender']})")
+        print()
+
+    if tttc_data:
+        def _fmt_pct(v): return f"{v:.1f}%" if v is not None else "—"
+        def _fmt_vnd(v): return f"{v:,} đ" if v is not None else "—"
+        print(f"--- TTTC: {tttc_data['total_reports']} trung tâm ---")
+        print(f"  TB bill TB : {_fmt_vnd(tttc_data['avg_tb_bill'])}")
+        print(f"  %HT TB     : {_fmt_pct(tttc_data['avg_revenue_pct'])}")
+        print(f"  %HOT TB    : {_fmt_pct(tttc_data['avg_hot_pct'])}")
+        print(f"  %tr HOT TB : {_fmt_pct(tttc_data['avg_hot_ratio'])}")
+        if tttc_data["top_centers"]:
+            print(f"  Top trung tâm theo %HT:")
+            for c in tttc_data["top_centers"]:
+                print(f"    - {c['venue']} — %HT {_fmt_pct(c['revenue_pct'])} "
+                      f"({c['sender']})")
+        if tttc_data["bottom_centers"]:
+            print(f"  Trung tâm cần chú ý:")
+            for c in tttc_data["bottom_centers"]:
+                print(f"    - {c['venue']} — %HT {_fmt_pct(c['revenue_pct'])} "
+                      f"({c['sender']})")
+        print()
+
+    if reports:
+        print(f"--- Nội dung báo cáo ({len(reports)}) ---")
+        for r in reports:
+            suffix = " — MUỘN" if r["is_late"] else ""
+            extra  = f" (+{r['extra_count']} tin nhắn khác)" if r["extra_count"] else ""
+            print(f"[{r['sender']} — {r['sent_at_vn']}{suffix}{extra}]")
+            print(r["text"])
+            print()
 
 
 # ---------------------------------------------------------------------------
@@ -735,6 +1286,112 @@ def write_asm_excel(asm_data: dict, path) -> None:
     wb.save(path)
 
 
+def write_weekly_excel(data: dict, group_members: list, path) -> None:
+    """Xuất báo cáo tuần ra .xlsx với 4 sheet: Tổng hợp tuần, Nội dung, Shop VT, TTTC."""
+    try:
+        import openpyxl
+        from openpyxl.styles import Alignment, Font
+    except ImportError:
+        print("Thiếu 'openpyxl'. Chạy: pip install openpyxl", file=sys.stderr)
+        sys.exit(1)
+
+    wb = openpyxl.Workbook()
+
+    # Sheet 1: Tổng hợp tuần
+    ws1 = wb.active
+    ws1.title = "Tổng hợp tuần"
+    ws1.append(["Người báo cáo", "Trạng thái", "Giờ gửi"])
+
+    reports_by_sender = {r["sender"]: r for r in data["reports"]}
+    member_names = sorted({
+        (m.get("displayName") or "").strip()
+        for m in group_members
+        if (m.get("displayName") or "").strip()
+    })
+
+    def _row_for(name: str):
+        r = reports_by_sender.get(name)
+        if r is None:
+            return (name, "Chưa báo cáo", "")
+        return (name, "Muộn" if r["is_late"] else "Đúng giờ", r["sent_at_vn"])
+
+    rows = [_row_for(n) for n in member_names]
+    status_order = {"Đúng giờ": 0, "Muộn": 1, "Chưa báo cáo": 2}
+    rows.sort(key=lambda r: (status_order[r[1]], r[2] or "ZZ", r[0]))
+    for row in rows:
+        ws1.append(list(row))
+
+    for cell in ws1[1]:
+        cell.font = Font(bold=True)
+    ws1.column_dimensions["A"].width = 28
+    ws1.column_dimensions["B"].width = 14
+    ws1.column_dimensions["C"].width = 10
+
+    # Sheet 2: Nội dung
+    ws2 = wb.create_sheet("Nội dung")
+    ws2.append(["Người báo cáo", "Giờ gửi", "Trạng thái", "Nội dung"])
+    for cell in ws2[1]:
+        cell.font = Font(bold=True)
+
+    for r in sorted(data["reports"], key=lambda r: r["sent_at_vn"]):
+        status = "Muộn" if r["is_late"] else "Đúng giờ"
+        extra = f"\n\n(+{r['extra_count']} tin nhắn khác)" if r["extra_count"] else ""
+        body = r["text"] + extra
+        ws2.append([r["sender"], r["sent_at_vn"], status, body])
+
+    ws2.column_dimensions["A"].width = 28
+    ws2.column_dimensions["B"].width = 10
+    ws2.column_dimensions["C"].width = 12
+    ws2.column_dimensions["D"].width = 100
+
+    for row_idx in range(2, ws2.max_row + 1):
+        ws2.cell(row=row_idx, column=4).alignment = Alignment(
+            wrap_text=True, vertical="top"
+        )
+
+    # Sheet 3: Shop VT
+    ws3 = wb.create_sheet("Shop VT")
+    ws3.append(["Shop", "Số cọc", "Ra tiêm", "Mức", "ASM"])
+    for cell in ws3[1]:
+        cell.font = Font(bold=True)
+    asm_data = data.get("asm_data") or {}
+    _rt_map = {r["shop_ref"]: r.get("ra_tiem_count")
+               for r in data.get("parsed_shop_vt", []) if r.get("shop_ref")}
+    for s in sorted(asm_data.get("all_shops", []),
+                    key=lambda x: x["deposit_count"], reverse=True):
+        ra = _rt_map.get(s["shop_ref"])
+        ws3.append([s["shop_ref"], s["deposit_count"],
+                    "" if ra is None else ra, s["level"], s["sender"]])
+    ws3.column_dimensions["A"].width = 50
+    ws3.column_dimensions["B"].width = 12
+    ws3.column_dimensions["C"].width = 12
+    ws3.column_dimensions["D"].width = 14
+    ws3.column_dimensions["E"].width = 28
+
+    # Sheet 4: TTTC
+    ws4 = wb.create_sheet("TTTC")
+    ws4.append(["Trung tâm", "%HT ngày", "%HOT", "TB bill",
+                "Tỉ trọng HOT", "Lượt KH mua", "ASM"])
+    for cell in ws4[1]:
+        cell.font = Font(bold=True)
+    for r in data.get("parsed_tttc", []):
+        ws4.append([
+            r.get("venue") or "",
+            r.get("revenue_pct")    if r.get("revenue_pct")    is not None else "",
+            r.get("hot_pct")        if r.get("hot_pct")        is not None else "",
+            r.get("tb_bill")        if r.get("tb_bill")        is not None else "",
+            r.get("hot_ratio")      if r.get("hot_ratio")      is not None else "",
+            r.get("customer_count") if r.get("customer_count") is not None else "",
+            r.get("sender") or "",
+        ])
+    ws4.column_dimensions["A"].width = 40
+    for col in ("B", "C", "D", "E", "F"):
+        ws4.column_dimensions[col].width = 14
+    ws4.column_dimensions["G"].width = 28
+
+    wb.save(path)
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -786,6 +1443,8 @@ Ví dụ:
                         help="Ngưỡng đặt cọc cao — shop có deposit > N (mặc định: 5)")
     parser.add_argument("--asm-deadline", default="20:00", metavar="HH:MM",
                         help="Deadline báo cáo hàng ngày (mặc định: 20:00, giờ VN)")
+    parser.add_argument("--weekly", default=None, metavar="YYYY-MM-DD",
+                        help="Báo cáo tuần một ngày: liệt kê ai đã/muộn/chưa báo cáo + dump text.")
     parser.add_argument("--date", default=None, metavar="YYYY-MM-DD",
                         help="Ngày kiểm tra compliance (mặc định: hôm nay giờ VN)")
     parser.add_argument("--skip-reporters", default="", metavar="NAMES",
@@ -793,12 +1452,16 @@ Ví dụ:
 
     args = parser.parse_args()
 
+    if args.weekly and (args.today or args.date_from or args.date_to or args.date):
+        print("Error: --weekly không dùng chung với --today / --from / --to / --date.", file=sys.stderr)
+        sys.exit(2)
+
     token   = args.token   or cfg.get("token")
     group   = args.group   or cfg.get("group")
     api_url = args.api_url or cfg.get("api_url", "https://api-chat.fpt.com")
 
-    # ── Validate (chỉ khi cần gọi API)
-    if not args.load:
+    # ── Validate (chỉ khi cần gọi API; --weekly tự kiểm tra bên trong)
+    if not args.load and not args.weekly:
         if not token:
             print("Error: --token là bắt buộc (hoặc set 'token' trong config.json)", file=sys.stderr)
             sys.exit(1)
@@ -818,6 +1481,72 @@ Ví dụ:
         args.date_from = _vn_today
         args.date_to   = _vn_today
         args.date      = _vn_today
+
+    # ── --weekly shortcut (báo cáo tuần một ngày)
+    if args.weekly:
+        try:
+            target_vn = datetime.strptime(args.weekly, "%Y-%m-%d").date()
+        except ValueError:
+            print(f"Error: --weekly giá trị không hợp lệ: {args.weekly}", file=sys.stderr)
+            sys.exit(2)
+
+        # Half-open VN-day window: [target 00:00+07, target+1 00:00+07)
+        vn_start_utc = datetime.combine(target_vn, time(0, 0), tzinfo=timezone.utc) - timedelta(hours=7)
+        vn_end_utc   = vn_start_utc + timedelta(days=1)
+
+        # Fetch or load raw messages
+        if args.load:
+            print(f"[*] Loading từ file: {args.load}", file=sys.stderr)
+            with open(args.load, encoding="utf-8") as f:
+                messages = json.load(f)
+            print(f"[✓] Loaded {len(messages)} messages", file=sys.stderr)
+        else:
+            if not token:
+                print("Error: --weekly cần --token (hoặc config.json).", file=sys.stderr)
+                sys.exit(1)
+            if not group:
+                print("Error: --weekly cần --group (hoặc config.json).", file=sys.stderr)
+                sys.exit(1)
+            group_id = extract_group_id(group)
+            messages = fetch_all_messages(
+                token=token, group_id=group_id, base_url=api_url,
+                limit=args.limit, date_from=vn_start_utc,
+            )
+
+        if args.save:
+            with open(args.save, "w", encoding="utf-8") as f:
+                json.dump(messages, f, ensure_ascii=False, indent=2)
+            print(f"[✓] Đã lưu raw messages → {args.save}", file=sys.stderr)
+
+        # Clip to the half-open window. filter_by_date uses inclusive date_to,
+        # so subtract 1 microsecond to emulate half-open [start, end).
+        messages = filter_by_date(
+            messages, vn_start_utc, vn_end_utc - timedelta(microseconds=1),
+        )
+
+        # Members are REQUIRED for the missing list.
+        if not token or not group:
+            print(
+                "Error: --weekly cần token+group để lấy thành viên group cho compliance check.",
+                file=sys.stderr,
+            )
+            sys.exit(3)
+        _session = build_session(token)
+        members = fetch_group_members(_session, api_url, extract_group_id(group))
+        if not members:
+            print(
+                "Error: fetch_group_members trả rỗng hoặc lỗi — hủy báo cáo tuần.",
+                file=sys.stderr,
+            )
+            sys.exit(3)
+
+        deadline = cfg.get("deadline", "20:00")
+        data = analyze_weekly(messages, members, args.weekly, deadline=deadline)
+        print_weekly_report(data)
+        if args.excel:
+            write_weekly_excel(data, members, args.excel)
+            print(f"[✓] Đã xuất Excel → {args.excel}", file=sys.stderr)
+        return
 
     # ── Skip reporters: merge config + CLI
     skip_list = list(cfg.get("asm_skip_reporters", []))
