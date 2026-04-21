@@ -159,9 +159,11 @@ _NUMERIC_FLOAT_FIELDS = ("revenue_pct", "hot_pct", "hot_ratio_pct")
 _STRING_FIELDS = ("shop_ref", "tich_cuc", "van_de", "da_lam")
 
 
-def _coerce_int(v):
+def _coerce_int(v: object) -> int | None:
     if v is None:
         return None
+    if isinstance(v, bool):
+        raise LLMParseError(f"cannot coerce int: {v!r}")
     if isinstance(v, int):
         return v
     if isinstance(v, float) and v.is_integer():
@@ -174,9 +176,11 @@ def _coerce_int(v):
     raise LLMParseError(f"cannot coerce int: {v!r}")
 
 
-def _coerce_float(v):
+def _coerce_float(v: object) -> float | None:
     if v is None:
         return None
+    if isinstance(v, bool):
+        raise LLMParseError(f"cannot coerce float: {v!r}")
     if isinstance(v, (int, float)):
         return float(v)
     if isinstance(v, str) and v.strip():
@@ -208,7 +212,11 @@ def _validate_and_coerce(raw: dict) -> list[dict]:
         cleaned = {"report_type": rtype}
         for fld in _STRING_FIELDS:
             v = r.get(fld)
-            cleaned[fld] = v if (v is None or isinstance(v, str)) else str(v)
+            if v is not None and not isinstance(v, str):
+                raise LLMParseError(
+                    f"report[{i}].{fld}: expected string, got {type(v).__name__}"
+                )
+            cleaned[fld] = v
         for fld in _NUMERIC_INT_FIELDS:
             cleaned[fld] = _coerce_int(r.get(fld))
         for fld in _NUMERIC_FLOAT_FIELDS:

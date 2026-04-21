@@ -146,3 +146,50 @@ def test_validate_rejects_bad_report_type():
 def test_validate_rejects_missing_reports_field():
     with pytest.raises(LLMParseError):
         _validate_and_coerce({"unparseable": False})
+
+
+def test_coerce_int_rejects_bool():
+    with pytest.raises(LLMParseError):
+        le._coerce_int(True)
+    with pytest.raises(LLMParseError):
+        le._coerce_int(False)
+
+
+def test_coerce_float_rejects_bool():
+    with pytest.raises(LLMParseError):
+        le._coerce_float(True)
+
+
+def test_validate_rejects_list_in_string_field():
+    raw = {
+        "reports": [
+            {"report_type": "daily_shop_vt", "shop_ref": "S1",
+             "van_de": ["a", "b"],  # list, not a string
+             "deposit_count": None, "ra_tiem_count": None,
+             "kh_tu_van_count": None,
+             "tich_cuc": None, "da_lam": None,
+             "revenue_pct": None, "hot_pct": None,
+             "hot_ratio_pct": None, "tb_bill_vnd": None,
+             "customer_count": None}
+        ],
+        "unparseable": False, "reason": None,
+    }
+    with pytest.raises(LLMParseError):
+        _validate_and_coerce(raw)
+
+
+def test_validate_rejects_dict_in_string_field():
+    raw = {
+        "reports": [
+            {"report_type": "weekend_tttc", "shop_ref": {"nested": "bad"},
+             "deposit_count": None, "ra_tiem_count": None,
+             "kh_tu_van_count": None,
+             "tich_cuc": None, "van_de": None, "da_lam": None,
+             "revenue_pct": None, "hot_pct": None,
+             "hot_ratio_pct": None, "tb_bill_vnd": None,
+             "customer_count": None}
+        ],
+        "unparseable": False, "reason": None,
+    }
+    with pytest.raises(LLMParseError):
+        _validate_and_coerce(raw)
