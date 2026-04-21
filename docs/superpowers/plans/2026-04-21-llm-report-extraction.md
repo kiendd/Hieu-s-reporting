@@ -114,9 +114,11 @@ def test_pytest_runs(sanity):
 - [ ] **Step 7: Modify `.gitignore` — add two lines**
 
 ```
-.llm_cache/
+.llm_cache/*
 !.llm_cache/.gitkeep
 ```
+
+(`.llm_cache/*` ignores the contents; the negation preserves `.gitkeep` so the empty directory lives in the tree. `.llm_cache/` without the `*` would exclude the directory itself and make the negation a no-op in some git versions.)
 
 - [ ] **Step 8: Create `.llm_cache/.gitkeep`** (empty file).
 
@@ -773,7 +775,11 @@ def test_llm_call_retries_on_connection_error(fake_openai, monkeypatch):
     le._reset_stats()
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setattr(le, "_RETRY_SLEEP", lambda s: None)  # skip backoff
-    fake_openai.chat.completions.error = openai.APIConnectionError(request=None)
+    # openai.APIConnectionError's __init__ signature varies across SDK versions.
+    # Bypass it via __new__ + manual attribute setup so the test is version-safe.
+    err = openai.APIConnectionError.__new__(openai.APIConnectionError)
+    err.args = ("connection refused",)
+    fake_openai.chat.completions.error = err
     fake_openai.chat.completions.queue.append({
         "reports": [], "unparseable": True, "reason": "test",
     })
@@ -1196,9 +1202,15 @@ git commit -m "docs: thêm llm block (base_url, model) vào config.example.json"
 - Create: `tests/test_templates.py`
 - Create: `templates/daily/1.expected.json`
 
+- [ ] **Step 0: Read the template file first** — the example JSON below is a structural guide, but the strings (`shop_ref`, `tich_cuc`, `van_de`, `da_lam`) must mirror the exact text in `templates/daily/1`, including Vietnamese diacritics and punctuation. Always open the template, don't trust the plan's example wholesale:
+
+```bash
+cat templates/daily/1
+```
+
 - [ ] **Step 1: Create expected file for `templates/daily/1`**
 
-Load `templates/daily/1` (the "Dear Anh, Chị ... Shop 80035 ... cọc 12 ..." template). Write `templates/daily/1.expected.json`:
+Write `templates/daily/1.expected.json` based on what you just read — the following is a *shape reference*, adjust the string values to match the actual file content:
 
 ```json
 {
@@ -1439,9 +1451,9 @@ def analyze_asm_reports(parsed_reports: list,
 
 - [ ] **Step 3: Adapt `analyze_tttc_reports`** (line 667) — same filter, but `report_type == "weekend_tttc"`. Also skip `parse_error is not None`.
 
-- [ ] **Step 4: Adapt `check_asm_compliance`** (line 729)
+- [ ] **Step 4: Adapt `check_asm_compliance`** (line 729) AND `check_late_reporters` (line 767)
 
-The function compares `parsed_reports` senders against `members`. Filter to `daily_shop_vt` at top so unknown/TTTC reports don't count:
+Both functions iterate `parsed_reports` against `members` and read `r["sender"]` / `r.get("sent_at")`. With the new schema, TTTC reports and unparseable stubs will share those fields too — without a filter they'd be counted as daily-report compliance data, which is wrong. Add the filter at the top of **both** functions:
 
 ```python
     parsed_reports = [r for r in parsed_reports
@@ -1522,13 +1534,15 @@ pytest -v
 ```
 Expected: 21 unit tests + 15 template tests = 36 passed.
 
-- [ ] **Step 11: Print-report smoke against a saved snapshot if one exists**
+- [ ] **Step 11: Print-report smoke against a saved snapshot (offline, no real API)**
 
-If `raw.json` exists in the repo root:
+If `raw.json` exists in the repo root, run with a deliberately-unreachable base URL so `_llm_call` enters the `APIConnectionError` retry path and degrades to unparseable stubs — no real API hit, no auth error, just pipeline execution:
 ```bash
-OPENAI_API_KEY=sk-test python fpt_chat_stats.py --load raw.json --today 2>&1 | head -40
+OPENAI_API_KEY=sk-test \
+OPENAI_BASE_URL=http://127.0.0.1:1/v1 \
+python fpt_chat_stats.py --load raw.json --today 2>&1 | tail -40
 ```
-With `sk-test` (fake key) the `_llm_call` will fail on first call, producing unparseable stubs — that's acceptable for the smoke; it proves the pipeline *executes*.
+Expected: the CLI completes without a Python traceback; the stderr tail shows the stats line and a count of `llm_error=N` matching the number of detected candidates. The "Không parse được" section in the printed report (or the equivalent stub entries) should list every candidate with a `parse_error`.
 
 Skip this step if no `raw.json` exists.
 
@@ -1688,39 +1702,50 @@ git commit -m "docs: cập nhật CLAUDE.md — llm_extractor pipeline + pytest 
 
 ---
 
-## Task 16: OpenSpec update
+## Task 16: OpenSpec change proposal
+
+Per `CLAUDE.md`: *"For any feature work beyond a bugfix, follow `openspec/AGENTS.md` — proposals go in `openspec/changes/<change-id>/` and must pass `openspec validate <id> --strict --no-interactive` before implementation."*
+
+This refactor replaces a whole extraction subsystem, so the default is a **change proposal**, not an in-place spec edit.
 
 **Files:**
-- Decide: update `openspec/specs/fpt-chat-stats/spec.md` in place, OR create `openspec/changes/<id>/` proposal.
+- Create: `openspec/changes/2026-04-21-llm-report-extraction/proposal.md`
+- Create: `openspec/changes/2026-04-21-llm-report-extraction/tasks.md`
+- Create: `openspec/changes/2026-04-21-llm-report-extraction/specs/fpt-chat-stats/spec.md` (the updated spec delta)
 
-The project's AGENTS.md at `openspec/AGENTS.md` is authoritative. Follow its guidance:
-
-- [ ] **Step 1: Read `openspec/AGENTS.md` and decide approach.**
+- [ ] **Step 1: Read `openspec/AGENTS.md` to confirm current proposal format and required files.**
 
 ```bash
 cat openspec/AGENTS.md
 ```
 
-- [ ] **Step 2: If creating a change proposal**
+- [ ] **Step 2: Scaffold the change directory**
 
 ```bash
-mkdir -p openspec/changes/2026-04-21-llm-report-extraction
+mkdir -p openspec/changes/2026-04-21-llm-report-extraction/specs/fpt-chat-stats
 ```
 
-Create `proposal.md`, `tasks.md`, `specs/fpt-chat-stats/spec.md` as required, then:
+- [ ] **Step 3: Write `proposal.md`** — short rationale mirroring the spec's Problem / Goal / Non-goals sections, with a link to `docs/superpowers/specs/2026-04-21-llm-report-extraction-design.md`.
+
+- [ ] **Step 4: Write `tasks.md`** — the 17 in-repo tasks from this plan (Task 17 and 18 are validation-only, exclude).
+
+- [ ] **Step 5: Write `specs/fpt-chat-stats/spec.md`** — the updated parsing section matching the new architecture (LLM extractor, 1-to-N schema, cache, stats, unparseable stub).
+
+- [ ] **Step 6: Validate**
+
 ```bash
 openspec validate 2026-04-21-llm-report-extraction --strict --no-interactive
 ```
 Expected: validation passes.
 
-- [ ] **Step 3: If updating existing spec in place, edit the parsing sections to match the new design.**
-
-- [ ] **Step 4: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add openspec/
-git commit -m "docs(openspec): LLM extractor replaces regex parser"
+git add openspec/changes/2026-04-21-llm-report-extraction/
+git commit -m "docs(openspec): đề xuất đổi parser regex sang LLM extractor"
 ```
+
+(The change stays in `openspec/changes/` until implementation is complete and an archive commit moves it to `openspec/changes/archive/` per project convention — out of scope for this plan.)
 
 ---
 
