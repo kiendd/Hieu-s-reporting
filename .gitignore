@@ -20,3 +20,6 @@ __pycache__/
 
 # Generated Excel reports
 *.xlsx
+
+.llm_cache/*
+!.llm_cache/.gitkeep
