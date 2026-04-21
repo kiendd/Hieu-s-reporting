@@ -380,3 +380,18 @@ def extract_reports(msg: dict) -> list[Report]:
     _stats["llm_call"] += 1
     _save_cache(content, extracted)
     return [_hydrate(r, msg, source="llm") for r in extracted]
+
+
+def configure(api_key: str | None = None,
+              base_url: str | None = None,
+              model: str | None = None) -> None:
+    """Set env vars that _get_client / _llm_call read. Idempotent. Any
+    non-None argument overwrites the existing env value; None leaves it
+    alone (so env vars from shell still win when CLI/UI don't set them)."""
+    if api_key is not None:
+        os.environ["OPENAI_API_KEY"] = api_key
+    if base_url is not None:
+        os.environ["OPENAI_BASE_URL"] = base_url
+    if model is not None:
+        os.environ["LLM_MODEL"] = model
+    _reset_client_cache()

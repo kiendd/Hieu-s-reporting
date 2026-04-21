@@ -1449,8 +1449,20 @@ Ví dụ:
                         help="Ngày kiểm tra compliance (mặc định: hôm nay giờ VN)")
     parser.add_argument("--skip-reporters", default="", metavar="NAMES",
                         help="Tên cách nhau bằng dấu phẩy — loại khỏi compliance check")
+    parser.add_argument("--llm-base-url", dest="llm_base_url", default=None,
+                        help="OpenAI-compatible base URL (default: https://api.openai.com/v1)")
+    parser.add_argument("--llm-model", dest="llm_model", default=None,
+                        help="LLM model name (default: gpt-4o-mini)")
 
     args = parser.parse_args()
+
+    import llm_extractor
+    _llm_cfg = cfg.get("llm") or {}
+    llm_extractor.configure(
+        api_key = _llm_cfg.get("api_key"),
+        base_url= args.llm_base_url or _llm_cfg.get("base_url"),
+        model   = args.llm_model    or _llm_cfg.get("model"),
+    )
 
     if args.weekly and (args.today or args.date_from or args.date_to or args.date):
         print("Error: --weekly không dùng chung với --today / --from / --to / --date.", file=sys.stderr)

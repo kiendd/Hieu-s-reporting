@@ -1,4 +1,5 @@
 """Unit tests for llm_extractor module."""
+import os
 from pathlib import Path
 
 import pytest
@@ -337,3 +338,15 @@ def test_extract_reports_returns_empty_for_non_report(fake_openai, tmp_cache, mo
     })
     out = le.extract_reports(_fake_msg("Dear Anh Chi"))
     assert out == []
+
+
+def test_configure_sets_env_and_clears_client(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    le._client_cache[("stale", "url")] = object()
+    le.configure(api_key="k1", base_url="https://x/v1", model="gpt-foo")
+    assert os.environ["OPENAI_API_KEY"] == "k1"
+    assert os.environ["OPENAI_BASE_URL"] == "https://x/v1"
+    assert os.environ["LLM_MODEL"] == "gpt-foo"
+    assert le._client_cache == {}
