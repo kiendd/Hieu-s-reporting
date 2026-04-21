@@ -37,7 +37,7 @@ Replace regex-based extraction with an LLM-based extractor, while:
 |---|---|---|
 | 1 | Scope | LLM always on extraction; regex retained only as cheap pre-filter. All existing regex parsers (`parse_asm_report`, `parse_tttc_report`, `_extract_sections`, TTTC metric regexes) are removed. |
 | 2 | Provider | OpenAI Python SDK with config-driven `base_url` + `api_key` + `model`. |
-| 3 | Fallback trigger | N/A — no hybrid path. Every message passing regex pre-filter goes to the LLM (after cache lookup). |
+| 3 | Fallback trigger | N/A — no LLM-vs-regex hybrid. The regex pre-filter is a *candidate selector* (cheaply excludes non-report chat messages), not a fallback path. Every candidate goes to the LLM after cache lookup. |
 | 4 | Caching | Disk cache keyed by `sha256(content) + PROMPT_VERSION`, one JSON file per entry under `.llm_cache/`. Stats counters for `llm_call / llm_cached / llm_error` logged to stderr / Streamlit sidebar. |
 | 5 | Schema | 1-to-N. A message produces `list[Report]`; each `Report` carries a `report_type` discriminator. A single unified `Report` TypedDict with nullable per-type fields. |
 | 6 | Failure mode | Unparseable reports are preserved with a `parse_error` field, surfaced in UI/Excel as "Không parse được: {reason}". Missing API key at config time is a hard error. |
@@ -196,8 +196,9 @@ Three settings, following existing precedence (CLI > env > `config.json` > defau
 ### Disk cache
 
 - Location: `.llm_cache/` at project root. Added to `.gitignore`.
-- File per entry: `.llm_cache/<first-16-chars-of-sha256>_<prompt_version>.json`.
-- Contents: validated `list[Report]` from LLM (message-level metadata rehydrated on read, not stored in file).
+- **Logical cache key**: `sha256(content) + "_" + PROMPT_VERSION` (full 64-char hex).
+- **On-disk filename**: `.llm_cache/<first-16-hex-chars-of-sha256>_<prompt_version>.json` — truncated to 16 hex chars (64 bits) for readability. Collision probability for the message volumes here is negligible; the first-line header inside each cache file records the full sha256 so collisions would be detectable if they ever occurred.
+- **Contents stored**: only LLM-derived extraction fields (the per-report payload). Message-level metadata (`sender`, `sender_id`, `sent_at`, `message_id`, `source`) is NOT stored in the cache file — `extract_reports(msg)` always reconstructs it from `msg` on both cache-hit and cache-miss paths. This keeps `_load_cache(content_hash)` signature pure-functional on content and means cache files remain valid across re-ingests where the same content reappears with different `message_id`.
 - No TTL — content is immutable.
 - No locking — CLI and Streamlit (per session) are single-threaded; duplicate writes are idempotent.
 
