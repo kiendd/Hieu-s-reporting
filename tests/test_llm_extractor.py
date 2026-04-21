@@ -275,3 +275,65 @@ def test_llm_call_empty_response_raises_parse_error(fake_openai, tmp_cache, monk
     fake_openai.chat.completions.create = _empty_create
     with pytest.raises(le.LLMParseError):
         le._llm_call("content")
+
+
+def _fake_msg(content: str, sender: str = "Alice", mid: str = "m1") -> dict:
+    return {
+        "content":   content,
+        "user":      {"displayName": sender, "id": f"u-{sender}"},
+        "createdAt": "2026-04-21T10:00:00Z",
+        "id":        mid,
+        "type":      "TEXT",
+    }
+
+
+def test_extract_reports_caches_second_call(fake_openai, tmp_cache, monkeypatch):
+    le._reset_stats()
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    fake_openai.chat.completions.queue.append({
+        "reports": [{"report_type": "daily_shop_vt", "shop_ref": "S1",
+                     "deposit_count": 12, "ra_tiem_count": None,
+                     "kh_tu_van_count": None,
+                     "tich_cuc": None, "van_de": None, "da_lam": None,
+                     "revenue_pct": None, "hot_pct": None,
+                     "hot_ratio_pct": None, "tb_bill_vnd": None,
+                     "customer_count": None}],
+        "unparseable": False, "reason": None,
+    })
+    msg = _fake_msg("12 cọc shop X")
+    out1 = le.extract_reports(msg)
+    out2 = le.extract_reports(msg)
+    assert len(out1) == 1 and len(out2) == 1
+    assert le.get_stats() == {"llm_call": 1, "llm_cached": 1, "llm_error": 0}
+    assert out1[0]["source"] == "llm"
+    assert out2[0]["source"] == "cache"
+    assert out1[0]["message_id"] == "m1"
+    assert out1[0]["sender"] == "Alice"
+
+
+def test_extract_reports_unparseable_returns_stub(fake_openai, tmp_cache, monkeypatch):
+    le._reset_stats()
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(le, "_RETRY_SLEEP", lambda s: None)
+    def _bad(**kw):
+        class M: content = "not-json{{{"
+        class C: message = M()
+        class R: choices = [C()]
+        return R()
+    fake_openai.chat.completions.create = _bad  # type: ignore
+    msg = _fake_msg("something weird")
+    out = le.extract_reports(msg)
+    assert len(out) == 1
+    assert out[0]["report_type"] == "unknown"
+    assert out[0]["parse_error"] is not None
+    assert le.get_stats()["llm_error"] == 1
+
+
+def test_extract_reports_returns_empty_for_non_report(fake_openai, tmp_cache, monkeypatch):
+    le._reset_stats()
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    fake_openai.chat.completions.queue.append({
+        "reports": [], "unparseable": True, "reason": "greeting only",
+    })
+    out = le.extract_reports(_fake_msg("Dear Anh Chi"))
+    assert out == []

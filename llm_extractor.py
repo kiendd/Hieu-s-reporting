@@ -310,3 +310,73 @@ def _llm_call(content: str) -> list[dict]:
         except json.JSONDecodeError as e:
             raise LLMParseError(f"invalid JSON: {e}") from e
     raise LLMParseError(f"LLM call failed after retries: {last_exc!r}")
+
+
+def _unparseable_stub(msg: dict, reason: str) -> Report:
+    u = msg.get("user") or {}
+    return {   # type: ignore[return-value]
+        "report_type": "unknown",
+        "shop_ref": None,
+        "sender": u.get("displayName", "Unknown"),
+        "sender_id": u.get("id", ""),
+        "sent_at": msg.get("createdAt", ""),
+        "message_id": msg.get("id", ""),
+        "source": "llm",
+        "parse_error": reason,
+        "deposit_count": None, "ra_tiem_count": None,
+        "kh_tu_van_count": None, "tich_cuc": None, "van_de": None,
+        "da_lam": None, "revenue_pct": None, "hot_pct": None,
+        "hot_ratio_pct": None, "tb_bill_vnd": None, "customer_count": None,
+    }
+
+
+def _hydrate(extracted: dict, msg: dict, source: str) -> Report:
+    """Merge per-report LLM fields with per-message metadata."""
+    u = msg.get("user") or {}
+    report: Report = {   # type: ignore[assignment]
+        "report_type": extracted["report_type"],
+        "shop_ref":    extracted.get("shop_ref"),
+        "sender":      u.get("displayName", "Unknown"),
+        "sender_id":   u.get("id", ""),
+        "sent_at":     msg.get("createdAt", ""),
+        "message_id":  msg.get("id", ""),
+        "source":      source,
+        "parse_error": None,
+        "deposit_count":   extracted.get("deposit_count"),
+        "ra_tiem_count":   extracted.get("ra_tiem_count"),
+        "kh_tu_van_count": extracted.get("kh_tu_van_count"),
+        "tich_cuc":        extracted.get("tich_cuc"),
+        "van_de":          extracted.get("van_de"),
+        "da_lam":          extracted.get("da_lam"),
+        "revenue_pct":     extracted.get("revenue_pct"),
+        "hot_pct":         extracted.get("hot_pct"),
+        "hot_ratio_pct":   extracted.get("hot_ratio_pct"),
+        "tb_bill_vnd":     extracted.get("tb_bill_vnd"),
+        "customer_count":  extracted.get("customer_count"),
+    }
+    return report
+
+
+def extract_reports(msg: dict) -> list[Report]:
+    """Main entry: extract zero-or-more reports from a single message."""
+    content = msg.get("content") or ""
+
+    cached = _load_cache(content)
+    if cached is not None:
+        _stats["llm_cached"] += 1
+        return [_hydrate(r, msg, source="cache") for r in cached]
+
+    try:
+        extracted = _llm_call(content)
+    except (LLMParseError, LLMConfigError) as e:
+        _stats["llm_error"] += 1
+        return [_unparseable_stub(msg, reason=str(e))]
+    except Exception as e:
+        _stats["llm_error"] += 1
+        print(f"[llm] unexpected error on {msg.get('id','?')}: {e!r}",
+              file=sys.stderr)
+        return [_unparseable_stub(msg, reason=f"unexpected: {type(e).__name__}")]
+
+    _stats["llm_call"] += 1
+    _save_cache(content, extracted)
+    return [_hydrate(r, msg, source="llm") for r in extracted]
