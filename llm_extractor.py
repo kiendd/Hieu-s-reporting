@@ -100,3 +100,118 @@ def format_stats() -> str:
             f"cached={_stats['llm_cached']} "
             f"error={_stats['llm_error']} "
             f"— cache hit rate {hit}%")
+
+
+SYSTEM_PROMPT = """\
+You extract structured data from Vietnamese chat messages reporting
+ASM (Area Sales Manager) activity at FPT Long Chau vaccine shops.
+
+A single message may contain one OR more reports. Two report types:
+  - daily_shop_vt: Shop vệ tinh daily report (Mon-Fri).
+    Key signals: "Shop:", cọc count, KH tư vấn, ra tiêm, sections
+    "đã làm / tích cực / vấn đề".
+  - weekend_tttc: TTTC center weekend report (Sat-Sun).
+    Key signals: "TTTC:" or "VX HCM", DT/Doanh thu %, HOT %, TB bill,
+    "điểm sáng / giải pháp".
+
+Return ONLY valid JSON matching this schema:
+{
+  "reports": [
+    {
+      "report_type": "daily_shop_vt" | "weekend_tttc",
+      "shop_ref": string | null,
+      "deposit_count": int | null,
+      "ra_tiem_count": int | null,
+      "kh_tu_van_count": int | null,
+      "tich_cuc": string | null,
+      "van_de": string | null,
+      "da_lam": string | null,
+      "revenue_pct": float | null,
+      "hot_pct": float | null,
+      "hot_ratio_pct": float | null,
+      "tb_bill_vnd": int | null,
+      "customer_count": int | null
+    }
+  ],
+  "unparseable": boolean,
+  "reason": string | null
+}
+
+Rules:
+- Preserve Vietnamese text in narrative fields.
+- VND: "2,2tr" or "2.2M" → 2200000; "134.927.000" → 134927000.
+- Percentages: drop "%" sign, numeric only ("133%" → 133.0).
+- Never invent values. Missing → null.
+- Greetings ("Dear Anh, Chị") are NOT shop_ref.
+"""
+
+
+class LLMParseError(Exception):
+    """Raised when LLM response cannot be validated against the schema."""
+
+
+_VALID_TYPES = {"daily_shop_vt", "weekend_tttc"}
+_NUMERIC_INT_FIELDS = (
+    "deposit_count", "ra_tiem_count", "kh_tu_van_count",
+    "tb_bill_vnd", "customer_count",
+)
+_NUMERIC_FLOAT_FIELDS = ("revenue_pct", "hot_pct", "hot_ratio_pct")
+_STRING_FIELDS = ("shop_ref", "tich_cuc", "van_de", "da_lam")
+
+
+def _coerce_int(v):
+    if v is None:
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    if isinstance(v, str) and v.strip():
+        try:
+            return int(float(v.replace(",", ".")))
+        except ValueError:
+            raise LLMParseError(f"cannot coerce int: {v!r}")
+    raise LLMParseError(f"cannot coerce int: {v!r}")
+
+
+def _coerce_float(v):
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str) and v.strip():
+        try:
+            return float(v.replace(",", "."))
+        except ValueError:
+            raise LLMParseError(f"cannot coerce float: {v!r}")
+    raise LLMParseError(f"cannot coerce float: {v!r}")
+
+
+def _validate_and_coerce(raw: dict) -> list[dict]:
+    """Validate LLM JSON response, coerce types, return list of extraction
+    dicts (without per-message metadata; caller rehydrates)."""
+    if not isinstance(raw, dict) or "reports" not in raw:
+        raise LLMParseError("missing 'reports' field")
+    if raw.get("unparseable") is True:
+        return []
+    reports = raw["reports"]
+    if not isinstance(reports, list):
+        raise LLMParseError("'reports' is not a list")
+
+    out: list[dict] = []
+    for i, r in enumerate(reports):
+        if not isinstance(r, dict):
+            raise LLMParseError(f"report[{i}] is not a dict")
+        rtype = r.get("report_type")
+        if rtype not in _VALID_TYPES:
+            raise LLMParseError(f"report[{i}] bad report_type: {rtype!r}")
+        cleaned = {"report_type": rtype}
+        for fld in _STRING_FIELDS:
+            v = r.get(fld)
+            cleaned[fld] = v if (v is None or isinstance(v, str)) else str(v)
+        for fld in _NUMERIC_INT_FIELDS:
+            cleaned[fld] = _coerce_int(r.get(fld))
+        for fld in _NUMERIC_FLOAT_FIELDS:
+            cleaned[fld] = _coerce_float(r.get(fld))
+        out.append(cleaned)
+    return out

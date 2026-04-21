@@ -1,9 +1,12 @@
 """Unit tests for llm_extractor module."""
 from pathlib import Path
 
+import pytest
+
 from llm_extractor import (
     Report, PROMPT_VERSION,
     _cache_key, _load_cache, _save_cache, CACHE_DIR,
+    SYSTEM_PROMPT, LLMParseError, _validate_and_coerce,
 )
 import llm_extractor
 import llm_extractor as le
@@ -85,3 +88,61 @@ def test_stats_format_string():
     assert "llm_call=3" in msg
     assert "cached=17" in msg
     assert "85%" in msg  # 17 / (17+3) = 0.85
+
+
+def test_system_prompt_mentions_both_report_types():
+    assert "daily_shop_vt" in SYSTEM_PROMPT
+    assert "weekend_tttc" in SYSTEM_PROMPT
+
+
+def test_validate_accepts_well_formed_response():
+    raw = {
+        "reports": [
+            {"report_type": "daily_shop_vt", "shop_ref": "S1",
+             "deposit_count": 12, "ra_tiem_count": 2,
+             "kh_tu_van_count": 214,
+             "tich_cuc": "ok", "van_de": None, "da_lam": None,
+             "revenue_pct": None, "hot_pct": None, "hot_ratio_pct": None,
+             "tb_bill_vnd": None, "customer_count": None},
+        ],
+        "unparseable": False,
+        "reason": None,
+    }
+    out = _validate_and_coerce(raw)
+    assert len(out) == 1
+    assert out[0]["report_type"] == "daily_shop_vt"
+
+
+def test_validate_returns_empty_for_unparseable():
+    raw = {"reports": [], "unparseable": True, "reason": "greeting"}
+    assert _validate_and_coerce(raw) == []
+
+
+def test_validate_coerces_string_numeric():
+    raw = {
+        "reports": [
+            {"report_type": "weekend_tttc", "shop_ref": "T1",
+             "revenue_pct": "133", "hot_pct": None, "hot_ratio_pct": None,
+             "tb_bill_vnd": None, "customer_count": None,
+             "deposit_count": None, "ra_tiem_count": None,
+             "kh_tu_van_count": None, "tich_cuc": None,
+             "van_de": None, "da_lam": None},
+        ],
+        "unparseable": False, "reason": None,
+    }
+    out = _validate_and_coerce(raw)
+    assert out[0]["revenue_pct"] == 133.0
+
+
+def test_validate_rejects_bad_report_type():
+    raw = {
+        "reports": [{"report_type": "garbage", "shop_ref": None}],
+        "unparseable": False, "reason": None,
+    }
+    with pytest.raises(LLMParseError):
+        _validate_and_coerce(raw)
+
+
+def test_validate_rejects_missing_reports_field():
+    with pytest.raises(LLMParseError):
+        _validate_and_coerce({"unparseable": False})
