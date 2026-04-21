@@ -76,3 +76,27 @@ def _save_cache(content: str, reports: list[dict]) -> None:
     payload = {"_cache_key": _cache_key(content), "reports": reports}
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+_stats = {"llm_call": 0, "llm_cached": 0, "llm_error": 0}
+
+
+def _reset_stats() -> None:
+    for k in _stats:
+        _stats[k] = 0
+
+
+def get_stats() -> dict[str, int]:
+    return dict(_stats)
+
+
+def format_stats() -> str:
+    total = _stats["llm_call"] + _stats["llm_cached"]
+    if total == 0:
+        hit = 0
+    else:
+        hit = int(round(100 * _stats["llm_cached"] / total))
+    return (f"[llm] llm_call={_stats['llm_call']} "
+            f"cached={_stats['llm_cached']} "
+            f"error={_stats['llm_error']} "
+            f"— cache hit rate {hit}%")

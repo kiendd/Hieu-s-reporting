@@ -6,6 +6,7 @@ from llm_extractor import (
     _cache_key, _load_cache, _save_cache, CACHE_DIR,
 )
 import llm_extractor
+import llm_extractor as le
 
 
 def test_report_typeddict_fields_present():
@@ -68,3 +69,19 @@ def test_cache_filename_uses_16_hex_prefix(tmp_cache):
     name = files[0].name
     assert len(name.split("_")[0]) == 16
     assert name.endswith(".json")
+
+
+def test_stats_start_at_zero():
+    le._reset_stats()
+    assert le.get_stats() == {"llm_call": 0, "llm_cached": 0, "llm_error": 0}
+
+
+def test_stats_format_string():
+    le._reset_stats()
+    le._stats["llm_call"] = 3
+    le._stats["llm_cached"] = 17
+    le._stats["llm_error"] = 0
+    msg = le.format_stats()
+    assert "llm_call=3" in msg
+    assert "cached=17" in msg
+    assert "85%" in msg  # 17 / (17+3) = 0.85
