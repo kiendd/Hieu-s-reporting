@@ -1,0 +1,19 @@
+{
+  "reports": [
+    {
+      "report_type": "weekend_tttc",
+      "shop_ref": "533 Lạc Long Quân",
+      "deposit_count": null,
+      "ra_tiem_count": null,
+      "kh_tu_van_count": null,
+      "tich_cuc": "Giá trị bill hôm nay khá tốt, hôm nay TVV upsale khá ổn",
+      "van_de": null,
+      "da_lam": "Đã trao đổi với 2 BS và TVV về chỉ số hiện tại của TT, nhắc hai BS đặt lịch hẹn cho KH, hướng dẫn lại TVV cách tư vấn thêm SXH đặc biệt các KH vào TT đều tư vấn về tình hình dịch NMC và yêu cầu TVV khách nào cũng phải tư vấn để cải thiện tỉ trọng HH trong 10 ngày cuối tháng",
+      "revenue_pct": 145.0,
+      "hot_pct": null,
+      "hot_ratio_pct": 65.7,
+      "tb_bill_vnd": 2300000,
+      "customer_count": 45
+    }
+  ]
+}

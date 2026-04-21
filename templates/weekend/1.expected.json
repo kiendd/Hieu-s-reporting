@@ -1,0 +1,19 @@
+{
+  "reports": [
+    {
+      "report_type": "weekend_tttc",
+      "shop_ref": "58192 - VX HCM 284 Nguyễn Văn Tăng, P. Long Bình",
+      "deposit_count": null,
+      "ra_tiem_count": null,
+      "kh_tu_van_count": null,
+      "tich_cuc": null,
+      "van_de": null,
+      "da_lam": "Kèm TVV ôn luyện kịch bản & bí kíp tư vấn NMC kèm SXH, HPV kèm SXH, Cúm kèm SXH, Khách cũ kèm SXH theo clip mẫu từ các bạn TVV ưu tú; Giao chỉ tiêu TVV tăng dần % hàng dẫn kèm HOT lên 30% hướng đến mốc 40%",
+      "revenue_pct": 133.0,
+      "hot_pct": 133.0,
+      "hot_ratio_pct": 51.0,
+      "tb_bill_vnd": 2200000,
+      "customer_count": 28
+    }
+  ]
+}

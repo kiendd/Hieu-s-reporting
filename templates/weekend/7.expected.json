@@ -1,0 +1,19 @@
+{
+  "reports": [
+    {
+      "report_type": "daily_shop_vt",
+      "shop_ref": "LC HCM 20 PHẠM THẾ HIỂN",
+      "deposit_count": 12,
+      "ra_tiem_count": 19,
+      "kh_tu_van_count": 88,
+      "tich_cuc": "Nhân sự đã áp dụng kịch bản đầy đủ và năng nổ vui thoải mái hơn khi tương tác chăm sóc lấy thông tin KH vaccin và có sổ lưu lịch sử KH, có quan tâm tương tác xin kết bạn Zalo chăm sóc phát sinh cọc HPV/SXH/ VIÊM NÃO/ COMBO HÔ HẤP. Vì shop nhỏ nhưng các bạn chịu khó tích tiểu thành đại các mũi nhỏ nhưng được số lượng KH phát sinh đi tiêm phòng",
+      "van_de": "Một vài bạn chưa tốt là ở chỗ tháng này KH cũ từ chối tiêm mũi thiếu bạn đang thấy mất tương tác tiếp theo động viên hướng dẫn bạn cách vẫn duy trì chăm sóc và theo sát hỏi thăm khách hàng, những data tạo cọc trước hết 30 ngày hủy cọc các bạn chưa quan tâm theo để lên đơn cọc lại, lượt khách bán tại shop nhỏ không đông nhiều lượt khách nên chưa có cơ hội lớn nhiều cọc data nhưng bù lại các bạn chăm sóc sau KH tốt",
+      "da_lam": "Hướng dẫn thực tế tư vấn cho KH cùng DS 1-1, kèm tư vấn tại quầy, cách tiếp cận câu keys chuyển đổi từ tư vấn lối sống sang bảo vệ sức khỏe tiêm ngừa vaccin",
+      "revenue_pct": null,
+      "hot_pct": null,
+      "hot_ratio_pct": null,
+      "tb_bill_vnd": null,
+      "customer_count": null
+    }
+  ]
+}

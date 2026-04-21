@@ -1,0 +1,19 @@
+{
+  "reports": [
+    {
+      "report_type": "weekend_tttc",
+      "shop_ref": "VX HCM 81 Nguyễn An Ninh, Dĩ An",
+      "deposit_count": null,
+      "ra_tiem_count": null,
+      "kh_tu_van_count": null,
+      "tich_cuc": null,
+      "van_de": null,
+      "da_lam": "Hướng dẫn thanh toán trả góp, cho các bạn thực hiện thao tác trả góp cho nhuẫn nhuyễn. Chăm sóc data bầu; Tập trung các vaccine đang hot/ dịch tể + Hàng dẫn để tăng tỷ lệ hàng dẫn kèm hot ( mỗi ngày được tối đa 2 tiêm , 1 uống nên tư vấn tối đa, kèm vaccine tả đường uống )",
+      "revenue_pct": null,
+      "hot_pct": null,
+      "hot_ratio_pct": null,
+      "tb_bill_vnd": 2200000,
+      "customer_count": 61
+    }
+  ]
+}
