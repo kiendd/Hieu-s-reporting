@@ -16,6 +16,7 @@ from pathlib import Path
 
 
 PROMPT_VERSION = "v1"
+DEFAULT_MODEL = "gpt-4o-mini"
 
 
 class Report(TypedDict):
@@ -228,7 +229,7 @@ def _validate_and_coerce(raw: dict) -> list[dict]:
     return out
 
 
-_client_cache = None
+_client_cache: dict[tuple[str, str], "openai.OpenAI"] = {}
 _RETRY_SLEEP = time.sleep  # monkey-patchable in tests
 
 
@@ -237,9 +238,6 @@ class LLMConfigError(Exception):
 
 
 def _get_client():
-    global _client_cache
-    if _client_cache is not None:
-        return _client_cache
     try:
         import openai
     except ImportError as e:
@@ -251,22 +249,24 @@ def _get_client():
             "Extraction requires LLM access."
         )
     base_url = os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
-    _client_cache = openai.OpenAI(api_key=api_key, base_url=base_url)
-    return _client_cache
+    key = (api_key, base_url)
+    if key not in _client_cache:
+        _client_cache[key] = openai.OpenAI(api_key=api_key, base_url=base_url)
+    return _client_cache[key]
 
 
 def _reset_client_cache() -> None:
-    """Used by config-plumbing code after env vars change."""
-    global _client_cache
-    _client_cache = None
+    """Used by config-plumbing code after env vars change. Clears all
+    cached clients so the next _get_client() call re-reads env."""
+    _client_cache.clear()
 
 
 def _llm_call(content: str) -> list[dict]:
     """Call the LLM, return validated extraction dicts. Raises LLMParseError
     on schema failure; retries transient network/rate errors."""
-    import openai
-    model = os.environ.get("LLM_MODEL", "gpt-4o-mini")
+    model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
     client = _get_client()
+    import openai  # safe here — _get_client already confirmed availability
 
     last_exc = None
     attempts = [
@@ -288,8 +288,16 @@ def _llm_call(content: str) -> list[dict]:
                 ],
             )
             raw_text = resp.choices[0].message.content
+            if not raw_text:
+                raise LLMParseError("empty response from LLM")
             raw = json.loads(raw_text)
             return _validate_and_coerce(raw)
+        except (openai.AuthenticationError,
+                openai.PermissionDeniedError,
+                openai.NotFoundError) as e:
+            # Config-level failures: wrong key / wrong endpoint / wrong model.
+            # Surface as LLMConfigError so the UI can prompt for a fix.
+            raise LLMConfigError(f"{type(e).__name__}: {e}") from e
         except retriable as e:
             last_exc = e
             # connection/timeout: 1 retry; rate limit: up to 3 retries

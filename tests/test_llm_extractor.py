@@ -223,10 +223,55 @@ def test_llm_call_retries_on_connection_error(fake_openai, monkeypatch):
     # Bypass it via __new__ + manual attribute setup so the test is version-safe.
     err = openai.APIConnectionError.__new__(openai.APIConnectionError)
     err.args = ("connection refused",)
-    fake_openai.chat.completions.error = err
+    fake_openai.chat.completions.errors.append(err)
     fake_openai.chat.completions.queue.append({
         "reports": [], "unparseable": True, "reason": "test",
     })
     out = le._llm_call("content")
     assert out == []
     assert fake_openai.chat.completions.calls == 2  # 1 fail + 1 retry
+
+
+def test_llm_call_retries_on_rate_limit(fake_openai, tmp_cache, monkeypatch):
+    import openai
+    le._reset_stats()
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(le, "_RETRY_SLEEP", lambda s: None)
+    # Queue 3 RateLimitErrors followed by a successful response.
+    for _ in range(3):
+        err = openai.RateLimitError.__new__(openai.RateLimitError)
+        err.args = ("rate limited",)
+        fake_openai.chat.completions.errors.append(err)
+    fake_openai.chat.completions.queue.append({
+        "reports": [], "unparseable": True, "reason": "test",
+    })
+    out = le._llm_call("content")
+    assert out == []
+    assert fake_openai.chat.completions.calls == 4   # 3 fails + 1 success
+
+
+def test_llm_call_auth_error_becomes_config_error(fake_openai, tmp_cache, monkeypatch):
+    import openai
+    le._reset_stats()
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    err = openai.AuthenticationError.__new__(openai.AuthenticationError)
+    err.args = ("invalid key",)
+    fake_openai.chat.completions.errors.append(err)
+    with pytest.raises(le.LLMConfigError):
+        le._llm_call("content")
+
+
+def test_llm_call_empty_response_raises_parse_error(fake_openai, tmp_cache, monkeypatch):
+    le._reset_stats()
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    # Patch the fake's create to return None content directly.
+    def _empty_create(**kwargs):
+        fake_openai.chat.completions.calls += 1
+        class M: content = None
+        class C: message = M()
+        class R: choices = [C()]
+        return R()
+    fake_openai.chat.completions.create = _empty_create
+    with pytest.raises(le.LLMParseError):
+        le._llm_call("content")

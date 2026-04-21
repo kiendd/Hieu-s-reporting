@@ -15,7 +15,8 @@ def tmp_cache(tmp_path, monkeypatch):
 def fake_openai(monkeypatch):
     """Build a fake OpenAI client whose chat.completions.create returns
     canned JSON. Tests control the response via `.queue` (list of dicts
-    to return in order) or `.error` (exception instance to raise once).
+    to return in order) or `.errors` (queue of exception instances,
+    raised one per call before any queued response is consumed).
     """
     import json
     import llm_extractor
@@ -23,15 +24,13 @@ def fake_openai(monkeypatch):
     class _FakeCompletions:
         def __init__(self):
             self.queue: list = []
-            self.error = None
+            self.errors: list = []
             self.calls = 0
 
         def create(self, **kwargs):
             self.calls += 1
-            if self.error is not None:
-                err = self.error
-                self.error = None   # raise once, then stop
-                raise err
+            if self.errors:
+                raise self.errors.pop(0)
             if not self.queue:
                 raise AssertionError("fake_openai: no queued response")
             payload = self.queue.pop(0)
