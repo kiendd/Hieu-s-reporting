@@ -193,3 +193,40 @@ def test_validate_rejects_dict_in_string_field():
     }
     with pytest.raises(LLMParseError):
         _validate_and_coerce(raw)
+
+
+def test_llm_call_success(fake_openai, tmp_cache, monkeypatch):
+    le._reset_stats()
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    fake_openai.chat.completions.queue.append({
+        "reports": [{
+            "report_type": "daily_shop_vt", "shop_ref": "S1",
+            "deposit_count": 12, "ra_tiem_count": 2,
+            "kh_tu_van_count": 214,
+            "tich_cuc": None, "van_de": None, "da_lam": None,
+            "revenue_pct": None, "hot_pct": None, "hot_ratio_pct": None,
+            "tb_bill_vnd": None, "customer_count": None,
+        }],
+        "unparseable": False, "reason": None,
+    })
+    out = le._llm_call("some report content")
+    assert len(out) == 1
+    assert out[0]["shop_ref"] == "S1"
+
+
+def test_llm_call_retries_on_connection_error(fake_openai, monkeypatch):
+    import openai
+    le._reset_stats()
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(le, "_RETRY_SLEEP", lambda s: None)  # skip backoff
+    # openai.APIConnectionError's __init__ signature varies across SDK versions.
+    # Bypass it via __new__ + manual attribute setup so the test is version-safe.
+    err = openai.APIConnectionError.__new__(openai.APIConnectionError)
+    err.args = ("connection refused",)
+    fake_openai.chat.completions.error = err
+    fake_openai.chat.completions.queue.append({
+        "reports": [], "unparseable": True, "reason": "test",
+    })
+    out = le._llm_call("content")
+    assert out == []
+    assert fake_openai.chat.completions.calls == 2  # 1 fail + 1 retry

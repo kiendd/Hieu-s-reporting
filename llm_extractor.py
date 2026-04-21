@@ -9,6 +9,9 @@ from __future__ import annotations
 from typing import Literal, TypedDict
 import hashlib
 import json
+import os
+import sys
+import time
 from pathlib import Path
 
 
@@ -223,3 +226,79 @@ def _validate_and_coerce(raw: dict) -> list[dict]:
             cleaned[fld] = _coerce_float(r.get(fld))
         out.append(cleaned)
     return out
+
+
+_client_cache = None
+_RETRY_SLEEP = time.sleep  # monkey-patchable in tests
+
+
+class LLMConfigError(Exception):
+    """Raised when API key / base URL is missing at call time."""
+
+
+def _get_client():
+    global _client_cache
+    if _client_cache is not None:
+        return _client_cache
+    try:
+        import openai
+    except ImportError as e:
+        raise LLMConfigError("openai package not installed") from e
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise LLMConfigError(
+            "Set OPENAI_API_KEY (env or Streamlit sidebar). "
+            "Extraction requires LLM access."
+        )
+    base_url = os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+    _client_cache = openai.OpenAI(api_key=api_key, base_url=base_url)
+    return _client_cache
+
+
+def _reset_client_cache() -> None:
+    """Used by config-plumbing code after env vars change."""
+    global _client_cache
+    _client_cache = None
+
+
+def _llm_call(content: str) -> list[dict]:
+    """Call the LLM, return validated extraction dicts. Raises LLMParseError
+    on schema failure; retries transient network/rate errors."""
+    import openai
+    model = os.environ.get("LLM_MODEL", "gpt-4o-mini")
+    client = _get_client()
+
+    last_exc = None
+    attempts = [
+        (openai.APIConnectionError, 1, 2),
+        (openai.APITimeoutError,    1, 2),
+        (openai.RateLimitError,     3, 4),
+    ]
+    retriable = tuple(e for e, _, _ in attempts)
+
+    for attempt in range(5):   # max total tries
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                temperature=0,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user",   "content": content},
+                ],
+            )
+            raw_text = resp.choices[0].message.content
+            raw = json.loads(raw_text)
+            return _validate_and_coerce(raw)
+        except retriable as e:
+            last_exc = e
+            # connection/timeout: 1 retry; rate limit: up to 3 retries
+            max_retries = 3 if isinstance(e, openai.RateLimitError) else 1
+            if attempt >= max_retries:
+                break
+            base = 4 if isinstance(e, openai.RateLimitError) else 2
+            _RETRY_SLEEP(base * (2 ** attempt))
+            continue
+        except json.JSONDecodeError as e:
+            raise LLMParseError(f"invalid JSON: {e}") from e
+    raise LLMParseError(f"LLM call failed after retries: {last_exc!r}")
