@@ -1,0 +1,19 @@
+{
+  "reports": [
+    {
+      "report_type": "daily_shop_vt",
+      "shop_ref": "80035 173 Hùng Vương Tân An",
+      "deposit_count": 12,
+      "ra_tiem_count": 2,
+      "kh_tu_van_count": 214,
+      "tich_cuc": "Vệ tinh khai thác tốt NMC, khách nhi sau các đợt đào tạo offline.",
+      "van_de": "Shop còn 2 bạn chưa đạt doanh thu còn chậm hơn các bạn.",
+      "da_lam": "ASM đã họp trao đổi riêng  và hướng dẫn thêm cách care data và theo đuổi đến cùng.",
+      "revenue_pct": null,
+      "hot_pct": null,
+      "hot_ratio_pct": null,
+      "tb_bill_vnd": null,
+      "customer_count": null
+    }
+  ]
+}
