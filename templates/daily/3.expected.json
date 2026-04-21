@@ -1,0 +1,19 @@
+{
+  "reports": [
+    {
+      "report_type": "daily_shop_vt",
+      "shop_ref": "329 An Dương Vương",
+      "deposit_count": 15,
+      "ra_tiem_count": 0,
+      "kh_tu_van_count": 79,
+      "tich_cuc": "Shop mới vào VT nhưng các bạn rất nổ lực tư vấn, kết bạn với KH",
+      "van_de": "Chưa vững kiến thức, chưa quen dùng công cụ tư vấn",
+      "da_lam": "Coaching 1-1, kèm tư vấn tại quầy, hướng dẫn lưu thông tin và kết bạn Zalo, triển khai form kịch bản tư vấn, nhận diện KH",
+      "revenue_pct": null,
+      "hot_pct": null,
+      "hot_ratio_pct": null,
+      "tb_bill_vnd": null,
+      "customer_count": null
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "reports": [
+    {
+      "report_type": "daily_shop_vt",
+      "shop_ref": "SLA 343 Chu Văn Thịnh",
+      "deposit_count": 20,
+      "ra_tiem_count": 1,
+      "kh_tu_van_count": 280,
+      "tich_cuc": "Nhân viên có chủ động tư vấn vaccine, đưa tờ ctkm mại cho Kh, có add zalo với Kh tư chối chưa tiêm để tư vấn tiếp, có tư vấn lối sống hơn,",
+      "van_de": "Chưa đi sâu hẳn vào loại vaccin nào cho KH.",
+      "da_lam": "Gặp các bạn nhân viên có Số lượng cọc và Doanh thu chậm tiến độ, rà soát phân tích từng khách hàng để tìm cơ hội chốt khách.",
+      "revenue_pct": null,
+      "hot_pct": null,
+      "hot_ratio_pct": null,
+      "tb_bill_vnd": null,
+      "customer_count": null
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "reports": [
+    {
+      "report_type": "daily_shop_vt",
+      "shop_ref": "80931-LC HCM B06 Tổ 2 Ấp Phước Bình, Xã Long Hải",
+      "deposit_count": 2,
+      "ra_tiem_count": 0,
+      "kh_tu_van_count": 101,
+      "tich_cuc": "3/4 nhân sự đã hoàn thành target tháng. Các bạn khai thác tốt GĐLS1 chốt gói tiêm GĐ HPV/ Não mô cầu B.",
+      "van_de": "còn 1 bạn đang hoàn thành 41%, tiến độ đang chậm so với các bạn cùng shop. Số lượng data cọc các ngày gần đây giảm dần.",
+      "da_lam": "Trao đổi trực tiếp với bạn chưa làm tốt. Lắng nghe bạn tư vấn trực tiếp KH tại shop, chỉnh cách tư vấn tránh dùng quá nhiều câu hỏi Yes/No với KH. Nhắc nhở các bạn tích cực tư vấn lối sống trong quá trình bán hàng để có thể gợi mở vaccine vào. Đặt mục tiêu 5 data cọc/ ngày cho từng nhân viên shop.",
+      "revenue_pct": null,
+      "hot_pct": null,
+      "hot_ratio_pct": null,
+      "tb_bill_vnd": null,
+      "customer_count": null
+    }
+  ]
+}
