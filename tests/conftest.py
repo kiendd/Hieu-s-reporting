@@ -3,6 +3,9 @@ import pytest
 
 
 @pytest.fixture
-def sanity():
-    """Placeholder fixture proving pytest is wired."""
-    return "ok"
+def tmp_cache(tmp_path, monkeypatch):
+    """Isolate llm_extractor cache writes to a temp dir per test."""
+    import llm_extractor
+    monkeypatch.setattr(llm_extractor, "CACHE_DIR", tmp_path / ".llm_cache")
+    (tmp_path / ".llm_cache").mkdir()
+    return tmp_path / ".llm_cache"
