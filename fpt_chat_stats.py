@@ -260,7 +260,8 @@ def _score_weekly_message(content: str) -> int:
 # ---------------------------------------------------------------------------
 
 def detect_asm_reports(messages: list) -> list:
-    """Lọc tin nhắn TEXT là báo cáo ASM (heuristic: có 'shop' + số cọc)."""
+    """Lọc tin nhắn TEXT là báo cáo ASM (heuristic: có 'shop' + số cọc).
+    Cheap pre-filter — LLM-based extraction handles the real parsing."""
     result = []
     for msg in messages:
         if msg.get("type") != "TEXT":
@@ -272,9 +273,25 @@ def detect_asm_reports(messages: list) -> list:
     return result
 
 
+def extract_all_reports(messages: list) -> list:
+    """Pre-filter messages, then LLM-extract each candidate.
+
+    Returns a flat list of Report dicts (may be longer than candidates because
+    one message can produce multiple reports; may contain unparseable stubs
+    with parse_error set)."""
+    import llm_extractor
+    out = []
+    for msg in detect_asm_reports(messages):
+        out.extend(llm_extractor.extract_reports(msg))
+    return out
+
+
 def analyze_asm_reports(parsed_reports: list,
                         deposit_low: int = 2, deposit_high: int = 5) -> dict:
-    """Phân tích báo cáo ASM: lọc shop theo đặt cọc, thu thập ý tưởng, highlight."""
+    """Phân tích báo cáo ASM (daily_shop_vt only)."""
+    parsed_reports = [r for r in parsed_reports
+                      if r.get("report_type") == "daily_shop_vt"
+                      and r.get("parse_error") is None]
     all_shops, low_deposit_shops, high_deposit_shops, no_deposit_shops = [], [], [], []
     ideas, tich_cuc_list, han_che_list = [], [], []
     total_deposits = 0
@@ -335,19 +352,22 @@ def analyze_asm_reports(parsed_reports: list,
 
 def analyze_tttc_reports(parsed: list) -> dict:
     """Tổng hợp các TTTC report đã parse. Mọi tỉ số chỉ tính trên non-null."""
+    parsed = [r for r in parsed
+              if r.get("report_type") == "weekend_tttc"
+              and r.get("parse_error") is None]
     def _mean(xs):
         xs = [x for x in xs if x is not None]
         if not xs:
             return None
         return sum(xs) / len(xs)
 
-    avg_tb_bill = _mean([r["tb_bill"] for r in parsed])
+    avg_tb_bill = _mean([r["tb_bill_vnd"] for r in parsed])
     if avg_tb_bill is not None:
         avg_tb_bill = int(round(avg_tb_bill))
 
     avg_revenue_pct = _mean([r["revenue_pct"] for r in parsed])
     avg_hot_pct     = _mean([r["hot_pct"]     for r in parsed])
-    avg_hot_ratio   = _mean([r["hot_ratio"]   for r in parsed])
+    avg_hot_ratio   = _mean([r["hot_ratio_pct"]   for r in parsed])
 
     # Nulls-last stable sort
     def _sort_top(r):
@@ -359,22 +379,28 @@ def analyze_tttc_reports(parsed: list) -> dict:
         return (v is None, (v or 0))
 
     # Shallow-copy so downstream mutation doesn't alias back into parsed_tttc.
-    top    = [{**r} for r in sorted(parsed, key=_sort_top)[:5]]
-    bottom = [{**r} for r in sorted(parsed, key=_sort_bottom)[:5]]
+    # Also project the venue = shop_ref alias so downstream callsites that
+    # still read r["venue"] keep working.
+    def _copy(r):
+        d = {**r}
+        d["venue"] = r.get("shop_ref")
+        return d
+    top    = [_copy(r) for r in sorted(parsed, key=_sort_top)[:5]]
+    bottom = [_copy(r) for r in sorted(parsed, key=_sort_bottom)[:5]]
 
     ideas = [
-        {"sender": r["sender"], "venue": r["venue"],
+        {"sender": r["sender"], "venue": r.get("shop_ref"),
          "da_lam": r["da_lam"], "sent_at": r.get("sent_at", "")}
         for r in parsed
         if r.get("da_lam")
     ]
     tich_cuc = [
-        {"sender": r["sender"], "venue": r["venue"], "content": r["tich_cuc"]}
+        {"sender": r["sender"], "venue": r.get("shop_ref"), "content": r["tich_cuc"]}
         for r in parsed
         if r.get("tich_cuc")
     ]
     han_che = [
-        {"sender": r["sender"], "venue": r["venue"], "content": r["van_de"]}
+        {"sender": r["sender"], "venue": r.get("shop_ref"), "content": r["van_de"]}
         for r in parsed
         if r.get("van_de")
     ]
@@ -399,6 +425,9 @@ def check_asm_compliance(parsed_reports: list, members: list,
                          target_date_str: str, deadline_hhmm: str = "20:00",
                          skip_list: list | None = None) -> list:
     """Trả về displayName của thành viên chưa gửi báo cáo trước deadline."""
+    parsed_reports = [r for r in parsed_reports
+                      if r.get("report_type") == "daily_shop_vt"
+                      and r.get("parse_error") is None]
     VN_OFFSET = 7 * 3600
     try:
         deadline_h, deadline_m = map(int, deadline_hhmm.split(":"))
@@ -437,6 +466,9 @@ def check_late_reporters(parsed_reports: list,
                          target_date_str: str,
                          deadline_hhmm: str = "20:00") -> list:
     """Trả về list {sender, sent_at_vn} của ASM gửi báo cáo SAU deadline."""
+    parsed_reports = [r for r in parsed_reports
+                      if r.get("report_type") == "daily_shop_vt"
+                      and r.get("parse_error") is None]
     VN_OFFSET = 7 * 3600
     try:
         deadline_h, deadline_m = map(int, deadline_hhmm.split(":"))
@@ -466,6 +498,9 @@ def check_late_reporters(parsed_reports: list,
 
 def analyze_multiday(parsed_reports: list, date_from_str: str, date_to_str: str) -> dict:
     """Phân tích báo cáo ASM theo từng ngày trong khoảng nhiều ngày."""
+    parsed_reports = [r for r in parsed_reports
+                      if r.get("report_type") == "daily_shop_vt"
+                      and r.get("parse_error") is None]
     VN_OFFSET = 7 * 3600
 
     d_from = datetime.strptime(date_from_str, "%Y-%m-%d").date()
@@ -646,13 +681,13 @@ def analyze_weekly(messages: list,
     reporters = {r["sender"] for r in reports}
     missing_list = sorted(n for n in member_names if n not in reporters)
 
-    # --- Structured dispatch: parse each qualifying message by kind ---
-    parsed_shop_vt: list[dict] = []
-    parsed_tttc:    list[dict] = []
+    # --- Structured dispatch: LLM extraction, split by report_type ---
+    import llm_extractor
+    parsed_shop_vt: list = []
+    parsed_tttc:    list = []
+    unparseable:    list = []
     for sender, items in by_sender.items():
         for dt, _vn_dt, content in items:
-            # Reconstruct a minimal msg dict for the parsers.
-            # Use the per-message dt so each fake_msg gets a unique id.
             fake_msg = {
                 "content":   content,
                 "user":      {"displayName": sender, "id": ""},
@@ -660,12 +695,13 @@ def analyze_weekly(messages: list,
                 "id":        f"{sender}-{dt.timestamp()}",
                 "type":      "TEXT",
             }
-            kind = classify_report(content)
-            if kind == "shop_vt":
-                parsed_shop_vt.append(parse_asm_report(fake_msg))
-            elif kind == "tttc":
-                parsed_tttc.append(parse_tttc_report(fake_msg))
-            # unknown → dropped from structured pipelines, still in reports[]
+            for r in llm_extractor.extract_reports(fake_msg):
+                if r.get("parse_error") is not None:
+                    unparseable.append(r)
+                elif r["report_type"] == "daily_shop_vt":
+                    parsed_shop_vt.append(r)
+                elif r["report_type"] == "weekend_tttc":
+                    parsed_tttc.append(r)
 
     asm_data  = analyze_asm_reports(parsed_shop_vt) if parsed_shop_vt else None
     tttc_data = analyze_tttc_reports(parsed_tttc)   if parsed_tttc    else None
@@ -680,6 +716,7 @@ def analyze_weekly(messages: list,
         "tttc_data":      tttc_data,
         "parsed_shop_vt": parsed_shop_vt,
         "parsed_tttc":    parsed_tttc,
+        "unparseable":    unparseable,
     }
 
 
@@ -1258,13 +1295,12 @@ Ví dụ:
     # ── Filter by date range
     messages = filter_by_date(messages, date_from, date_to)
 
-    # ── ASM analysis (always)
-    asm_msgs = detect_asm_reports(messages)
-    print(f"[*] Phát hiện {len(asm_msgs)} báo cáo ASM", file=sys.stderr)
-    if not asm_msgs:
+    # ── ASM analysis (always) — LLM extraction handles classification + extract
+    parsed_reports = extract_all_reports(messages)
+    print(f"[*] Trích xuất {len(parsed_reports)} báo cáo (qua LLM)", file=sys.stderr)
+    if not parsed_reports:
         print("  [!] Không tìm thấy báo cáo ASM nào.", file=sys.stderr)
 
-    parsed_reports = [parse_asm_report(m) for m in asm_msgs]
     asm_data = analyze_asm_reports(parsed_reports,
                                    deposit_low=args.deposit_low,
                                    deposit_high=args.deposit_high)
@@ -1292,6 +1328,8 @@ Ví dụ:
     if args.excel:
         write_asm_excel(asm_data, args.excel)
         print(f"[✓] Đã xuất Excel → {args.excel}", file=sys.stderr)
+
+    print(llm_extractor.format_stats(), file=sys.stderr)
 
 
 if __name__ == "__main__":
