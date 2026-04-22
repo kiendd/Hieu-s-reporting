@@ -529,10 +529,15 @@ def check_asm_compliance(parsed_reports: list, members: list,
 
 def check_late_reporters(parsed_reports: list,
                          target_date_str: str,
+                         report_type: ReportType,
                          deadline_hhmm: str = "20:00") -> list:
-    """Trả về list {sender, sent_at_vn} của ASM gửi báo cáo SAU deadline."""
+    """Trả về list {sender, sent_at_vn} của ASM gửi báo cáo SAU deadline.
+
+    `report_type` REQUIRED — caller route theo weekday (xem
+    `report_type_for_date`).
+    """
     parsed_reports = [r for r in parsed_reports
-                      if r.get("report_type") == "daily_shop_vt"
+                      if r.get("report_type") == report_type
                       and r.get("parse_error") is None]
     VN_OFFSET = 7 * 3600
     try:

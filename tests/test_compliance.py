@@ -218,3 +218,37 @@ class TestCheckAsmCompliance:
             skip_list=["alice"],
         )
         assert missing == []
+
+
+from fpt_chat_stats import check_late_reporters
+
+
+class TestCheckLateReporters:
+    def test_daily_filters_only_shop_vt(self):
+        # Sent at 21:00 VN (14:00 UTC) — 1h after 20:00 deadline
+        reports = [
+            _report("daily_shop_vt", "Alice", "2026-04-20T14:00:00Z"),
+            _report("weekend_tttc",  "Bob",   "2026-04-20T14:00:00Z"),
+        ]
+        late = check_late_reporters(
+            reports, "2026-04-20", report_type="daily_shop_vt",
+        )
+        assert [r["sender"] for r in late] == ["Alice"]
+
+    def test_weekend_filters_only_tttc(self):
+        reports = [
+            _report("daily_shop_vt", "Alice", "2026-04-19T14:00:00Z"),
+            _report("weekend_tttc",  "Bob",   "2026-04-19T14:00:00Z"),
+        ]
+        late = check_late_reporters(
+            reports, "2026-04-19", report_type="weekend_tttc",
+        )
+        assert [r["sender"] for r in late] == ["Bob"]
+
+    def test_on_time_not_listed(self):
+        # Sent at 19:00 VN (12:00 UTC) — before 20:00 deadline
+        reports = [_report("daily_shop_vt", "Alice", "2026-04-20T12:00:00Z")]
+        late = check_late_reporters(
+            reports, "2026-04-20", report_type="daily_shop_vt",
+        )
+        assert late == []
