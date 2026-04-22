@@ -479,12 +479,20 @@ def _is_active_member(m: dict) -> bool:
 
 
 def check_asm_compliance(parsed_reports: list, members: list,
-                         target_date_str: str, deadline_hhmm: str = "20:00",
+                         target_date_str: str,
+                         report_type: ReportType,
+                         deadline_hhmm: str = "20:00",
                          skip_list: list | None = None) -> list:
-    """Trả về displayName của thành viên chưa gửi báo cáo trước deadline."""
+    """Trả về displayName của thành viên chưa gửi báo cáo trước deadline.
+
+    `report_type` REQUIRED — caller phải route theo weekday (xem
+    `report_type_for_date`). Default sẽ tạo silent bug khi quên route.
+    Members có lastReadMessageId=0 bị filter (zombie account).
+    """
     parsed_reports = [r for r in parsed_reports
-                      if r.get("report_type") == "daily_shop_vt"
+                      if r.get("report_type") == report_type
                       and r.get("parse_error") is None]
+    members = [m for m in members if _is_active_member(m)]
     VN_OFFSET = 7 * 3600
     try:
         deadline_h, deadline_m = map(int, deadline_hhmm.split(":"))
@@ -1396,8 +1404,14 @@ Ví dụ:
         target_date = args.date or datetime.fromtimestamp(
             _time.time() + 7 * 3600, tz=timezone.utc
         ).strftime("%Y-%m-%d")
+        rtype = report_type_for_date(
+            datetime.strptime(target_date, "%Y-%m-%d").date()
+        )
         asm_data["missing_reporters"] = check_asm_compliance(
-            parsed_reports, members, target_date, args.asm_deadline, skip_list,
+            parsed_reports, members, target_date,
+            report_type=rtype,
+            deadline_hhmm=args.asm_deadline,
+            skip_list=skip_list,
         )
 
     # ── Output

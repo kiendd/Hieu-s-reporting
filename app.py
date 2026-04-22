@@ -87,6 +87,7 @@ try:
         build_session,
         check_asm_compliance,
         check_late_reporters,
+        report_type_for_date,
         extract_all_reports,
         extract_group_id,
         fetch_all_messages,
@@ -1022,18 +1023,30 @@ if run:
                     deposit_high=cfg["deposit_high"],
                 )
 
+                from datetime import datetime as _dt
+                rtype = report_type_for_date(
+                    _dt.strptime(target_date, "%Y-%m-%d").date()
+                )
                 if members:
                     asm_data["missing_reporters"] = check_asm_compliance(
-                        parsed, members, target_date, cfg["deadline"], skip_list
+                        parsed, members, target_date,
+                        report_type=rtype,
+                        deadline_hhmm=cfg["deadline"],
+                        skip_list=skip_list,
                     )
                     asm_data["unreported_now"] = check_asm_compliance(
-                        parsed, members, target_date, _now_hhmm, skip_list
+                        parsed, members, target_date,
+                        report_type=rtype,
+                        deadline_hhmm=_now_hhmm,
+                        skip_list=skip_list,
                     )
                 else:
                     asm_data["unreported_now"] = None
 
                 asm_data["late_reporters"] = check_late_reporters(
-                    parsed, target_date, cfg["deadline"]
+                    parsed, target_date,
+                    report_type=rtype,
+                    deadline_hhmm=cfg["deadline"],
                 )
                 asm_data["parsed_reports"] = parsed
 

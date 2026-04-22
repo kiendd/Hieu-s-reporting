@@ -97,3 +97,124 @@ class TestIsActiveMember:
     def test_active_low_lastread(self):
         # Even reading 1 message qualifies as active
         assert _is_active_member({"lastReadMessageId": 1}) is True
+
+
+from fpt_chat_stats import check_asm_compliance
+
+
+def _report(report_type, sender, sent_at, parse_error=None):
+    return {
+        "report_type": report_type,
+        "sender": sender,
+        "sent_at": sent_at,
+        "parse_error": parse_error,
+    }
+
+
+def _member(name, username="u", last_read=10):
+    return {
+        "displayName": name,
+        "username": username,
+        "lastReadMessageId": last_read,
+    }
+
+
+class TestCheckAsmCompliance:
+    def test_daily_filters_only_shop_vt(self):
+        # Bob nộp TTTC report — không count cho daily check
+        reports = [
+            _report("daily_shop_vt", "Alice", "2026-04-20T10:00:00Z"),
+            _report("weekend_tttc",  "Bob",   "2026-04-20T10:00:00Z"),
+        ]
+        members = [_member("Alice"), _member("Bob", username="bob")]
+        missing = check_asm_compliance(
+            reports, members, "2026-04-20",
+            report_type="daily_shop_vt",
+        )
+        assert missing == ["Bob"]
+
+    def test_weekend_filters_only_tttc(self):
+        reports = [
+            _report("daily_shop_vt", "Alice", "2026-04-19T10:00:00Z"),
+            _report("weekend_tttc",  "Bob",   "2026-04-19T10:00:00Z"),
+        ]
+        members = [_member("Alice"), _member("Bob", username="bob")]
+        missing = check_asm_compliance(
+            reports, members, "2026-04-19",
+            report_type="weekend_tttc",
+        )
+        assert missing == ["Alice"]
+
+    def test_skips_zombie_members(self):
+        # Bob is zombie (lastReadMessageId=0) — should not appear in missing
+        reports = [_report("daily_shop_vt", "Alice", "2026-04-20T10:00:00Z")]
+        members = [
+            _member("Alice"),
+            _member("Bob", username="bob", last_read=0),
+        ]
+        missing = check_asm_compliance(
+            reports, members, "2026-04-20",
+            report_type="daily_shop_vt",
+        )
+        assert missing == []
+
+    def test_keeps_active_member_low_lastread(self):
+        reports = [_report("daily_shop_vt", "Alice", "2026-04-20T10:00:00Z")]
+        members = [
+            _member("Alice"),
+            _member("Bob", username="bob", last_read=1),
+        ]
+        missing = check_asm_compliance(
+            reports, members, "2026-04-20",
+            report_type="daily_shop_vt",
+        )
+        assert missing == ["Bob"]
+
+    def test_hieu_listed_once_when_zombie_dup(self):
+        """Regression: original bug — Hieu xuất hiện 2× trong missing.
+
+        2 entry (active + zombie cùng username). Sau filter zombie chỉ còn 1.
+        """
+        reports = []  # Hieu chưa nộp gì
+        members = [
+            _member("Hieu Hoang Chi", username="hieuhc", last_read=103),
+            _member("Hieu Hoang Chi", username="hieuhc", last_read=0),
+        ]
+        missing = check_asm_compliance(
+            reports, members, "2026-04-20",
+            report_type="daily_shop_vt",
+        )
+        assert missing == ["Hieu Hoang Chi"]
+
+    def test_drops_parse_error_reports(self):
+        reports = [
+            _report("daily_shop_vt", "Alice", "2026-04-20T10:00:00Z",
+                    parse_error="invalid format"),
+        ]
+        members = [_member("Alice")]
+        missing = check_asm_compliance(
+            reports, members, "2026-04-20",
+            report_type="daily_shop_vt",
+        )
+        assert missing == ["Alice"]  # report bị reject → coi như chưa nộp
+
+    def test_late_report_after_deadline_counts_as_missing(self):
+        # Sent at 21:00 VN, deadline 20:00
+        reports = [_report("daily_shop_vt", "Alice", "2026-04-20T14:00:00Z")]
+        members = [_member("Alice")]
+        missing = check_asm_compliance(
+            reports, members, "2026-04-20",
+            report_type="daily_shop_vt",
+            deadline_hhmm="20:00",
+        )
+        assert missing == ["Alice"]
+
+    def test_skip_list_excludes_member(self):
+        reports = []
+        members = [_member("Alice")]
+        missing = check_asm_compliance(
+            reports, members, "2026-04-20",
+            report_type="daily_shop_vt",
+            skip_list=["alice"],
+        )
+        assert missing == []
