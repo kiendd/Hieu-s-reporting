@@ -422,3 +422,84 @@ def test_configure_sets_structured_outputs_env(monkeypatch):
     prev = os.environ["LLM_STRUCTURED_OUTPUTS"]
     le.configure(structured_outputs=None)
     assert os.environ["LLM_STRUCTURED_OUTPUTS"] == prev
+
+
+# ----------------------------------------------------------------------------
+# Concurrency (ThreadPoolExecutor in extract_all_reports)
+# ----------------------------------------------------------------------------
+
+def test_read_max_workers_default_and_env(monkeypatch):
+    monkeypatch.delenv("LLM_MAX_WORKERS", raising=False)
+    assert le._read_max_workers() == le.DEFAULT_MAX_WORKERS
+    monkeypatch.setenv("LLM_MAX_WORKERS", "8")
+    assert le._read_max_workers() == 8
+    # Clamp: too large / too small / garbage all coerce safely
+    monkeypatch.setenv("LLM_MAX_WORKERS", "0")
+    assert le._read_max_workers() == 1
+    monkeypatch.setenv("LLM_MAX_WORKERS", "999")
+    assert le._read_max_workers() == 32
+    monkeypatch.setenv("LLM_MAX_WORKERS", "banana")
+    assert le._read_max_workers() == le.DEFAULT_MAX_WORKERS
+
+
+def test_configure_sets_max_workers_env(monkeypatch):
+    monkeypatch.delenv("LLM_MAX_WORKERS", raising=False)
+    le.configure(max_workers=6)
+    assert os.environ["LLM_MAX_WORKERS"] == "6"
+    prev = os.environ["LLM_MAX_WORKERS"]
+    le.configure(max_workers=None)
+    assert os.environ["LLM_MAX_WORKERS"] == prev
+
+
+def test_extract_all_reports_parallel_stats_thread_safe(
+        fake_openai, tmp_cache, monkeypatch):
+    """ThreadPoolExecutor fan-out: stats increment under lock — no lost updates
+    under 10 concurrent calls with worker pool of 4. Per-shop payload ordering
+    isn't asserted here because the fake queue is FIFO and independent of
+    request content; the real client returns content-specific responses."""
+    import fpt_chat_stats
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("LLM_MAX_WORKERS", "4")
+    le._reset_stats()
+
+    messages = []
+    for i in range(10):
+        messages.append({
+            "id": f"m{i}",
+            "type": "TEXT",
+            "createdAt": f"2026-04-21T10:00:{i:02d}Z",
+            "user": {"id": f"u{i}", "displayName": f"User{i}"},
+            "content": f"Shop {i:05d}: 5 cọc, ra tiêm 2",
+        })
+        fake_openai.chat.completions.queue.append({
+            "reports": [{
+                "report_type": "daily_shop_vt",
+                "shop_ref": f"shop-{i}",
+                "deposit_count": i,
+                "ra_tiem_count": 2,
+                "kh_tu_van_count": None,
+                "tich_cuc": None, "van_de": None, "da_lam": None,
+                "revenue_pct": None, "hot_pct": None, "hot_ratio_pct": None,
+                "tb_bill_vnd": None, "customer_count": None,
+            }],
+            "unparseable": False,
+            "reason": None,
+        })
+
+    out = fpt_chat_stats.extract_all_reports(messages)
+    assert len(out) == 10
+    # All 10 payloads were consumed — no dropped/double-counted calls.
+    assert {r["shop_ref"] for r in out} == {f"shop-{i}" for i in range(10)}
+    stats = le.get_stats()
+    assert stats["llm_call"] == 10
+    assert stats["llm_error"] == 0
+
+
+def test_extract_all_reports_empty_input_no_executor(monkeypatch):
+    """Zero candidates → short-circuit, no executor spin-up."""
+    import fpt_chat_stats
+    assert fpt_chat_stats.extract_all_reports([]) == []
+    # Non-matching messages also yield []
+    assert fpt_chat_stats.extract_all_reports([
+        {"type": "TEXT", "content": "hello nothing to see"}
+    ]) == []

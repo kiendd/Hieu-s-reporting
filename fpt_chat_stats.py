@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date as _date, datetime, timedelta, time, timezone
 
 try:
@@ -276,13 +277,23 @@ def detect_asm_reports(messages: list) -> list:
 def extract_all_reports(messages: list) -> list:
     """Pre-filter messages, then LLM-extract each candidate.
 
+    Runs LLM calls concurrently using a bounded ThreadPoolExecutor
+    (size via env `LLM_MAX_WORKERS`, default 4 — sized for OpenAI tier 1
+    ~200k TPM). Order is preserved: executor.map yields results in input
+    order regardless of completion order.
+
     Returns a flat list of Report dicts (may be longer than candidates because
     one message can produce multiple reports; may contain unparseable stubs
     with parse_error set)."""
     import llm_extractor
-    out = []
-    for msg in detect_asm_reports(messages):
-        out.extend(llm_extractor.extract_reports(msg))
+    candidates = detect_asm_reports(messages)
+    if not candidates:
+        return []
+    workers = min(llm_extractor._read_max_workers(), len(candidates))
+    out: list = []
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        for reports in executor.map(llm_extractor.extract_reports, candidates):
+            out.extend(reports)
     return out
 
 
@@ -1168,6 +1179,10 @@ Ví dụ:
                         dest="llm_structured_outputs",
                         action="store_false",
                         help="Force JSON mode even if config enables structured outputs.")
+    parser.add_argument("--llm-max-workers", dest="llm_max_workers",
+                        type=int, default=None, metavar="N",
+                        help="Concurrent LLM calls during extraction (default: 4, "
+                             "sized for OpenAI tier 1). Set 1 to disable parallelism.")
 
     args = parser.parse_args()
 
@@ -1176,11 +1191,15 @@ Ví dụ:
     _so = args.llm_structured_outputs
     if _so is None and "structured_outputs" in _llm_cfg:
         _so = bool(_llm_cfg["structured_outputs"])
+    _mw = args.llm_max_workers
+    if _mw is None and "max_workers" in _llm_cfg:
+        _mw = int(_llm_cfg["max_workers"])
     llm_extractor.configure(
         api_key = _llm_cfg.get("api_key"),
         base_url= args.llm_base_url or _llm_cfg.get("base_url"),
         model   = args.llm_model    or _llm_cfg.get("model"),
         structured_outputs = _so,
+        max_workers = _mw,
     )
 
     if args.weekly and (args.today or args.date_from or args.date_to or args.date):
