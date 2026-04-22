@@ -9,6 +9,7 @@ __pycache__/
 # Raw message dumps
 *.json
 !config.example.json
+!templates/**/*.expected.json
 
 # keywords.txt được commit (không nhạy cảm)
 
@@ -20,3 +21,6 @@ __pycache__/
 
 # Generated Excel reports
 *.xlsx
+
+.llm_cache/*
+!.llm_cache/.gitkeep

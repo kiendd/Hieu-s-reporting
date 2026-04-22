@@ -1,0 +1,19 @@
+{
+  "reports": [
+    {
+      "report_type": "weekend_tttc",
+      "shop_ref": "VX HCM 226-228 Yersin",
+      "deposit_count": null,
+      "ra_tiem_count": null,
+      "kh_tu_van_count": null,
+      "tich_cuc": null,
+      "van_de": null,
+      "da_lam": "Asm nghe ghi âm tư vấn hot kèm dẫn, hướng dẫn kịch bản tư vấn và tư vấn mẫu; chia nhiệm vụ Bác sĩ bọc lót TVV up sale đặc biệt tư vấn hot kèm dẫn; ASM, BS trưởng test bài và đào tạo TVV mới theo lộ trình, hỗ trợ 1 kèm 1 bọc lốt liên tục",
+      "revenue_pct": 64.0,
+      "hot_pct": null,
+      "hot_ratio_pct": 69.0,
+      "tb_bill_vnd": null,
+      "customer_count": null
+    }
+  ]
+}

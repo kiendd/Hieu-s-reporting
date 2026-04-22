@@ -1,0 +1,19 @@
+{
+  "reports": [
+    {
+      "report_type": "weekend_tttc",
+      "shop_ref": "580NDT",
+      "deposit_count": null,
+      "ra_tiem_count": null,
+      "kh_tu_van_count": null,
+      "tich_cuc": null,
+      "van_de": null,
+      "da_lam": null,
+      "revenue_pct": 143.0,
+      "hot_pct": 215.0,
+      "hot_ratio_pct": null,
+      "tb_bill_vnd": null,
+      "customer_count": null
+    }
+  ]
+}

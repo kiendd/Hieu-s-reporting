@@ -1,0 +1,19 @@
+{
+  "reports": [
+    {
+      "report_type": "daily_shop_vt",
+      "shop_ref": "LC HCM 1528 QL13, P. Chánh Hiệp",
+      "deposit_count": 4,
+      "ra_tiem_count": null,
+      "kh_tu_van_count": 85,
+      "tich_cuc": "Các bạn có triển khai tư vấn Vaccine trong khâu dặn dò và tư vấn lối sống cho khách hàng; Có thực hiện kết bạn Zalo và tạo đơn cọc vệ tinh đúng quy trình; Có phát sinh cọc các mũi: HPV / VNMC / Cúm + Phế cầu",
+      "van_de": "Chưa tự tin tư vấn cho 100% khách; Còn ngại khi tiếp cận khách mua các sản phẩm nhỏ lẻ (nước muối, khẩu trang, dầu nóng, bao cao su,…); Thao tác đơn hàng của bạn Phương Tây còn chậm",
+      "da_lam": "Hướng dẫn và làm mẫu trực tiếp các tình huống tiếp cận khách để các bạn tự tin hơn; Hướng dẫn lại quy trình kết bạn Zalo, thăm hỏi sức khỏe và dẫn dắt tư vấn Vaccine; Nhấn mạnh việc tư vấn lối sống trước khi gợi mở Vaccine; Hướng dẫn thao tác hệ thống mịn hơn",
+      "revenue_pct": null,
+      "hot_pct": null,
+      "hot_ratio_pct": null,
+      "tb_bill_vnd": null,
+      "customer_count": null
+    }
+  ]
+}

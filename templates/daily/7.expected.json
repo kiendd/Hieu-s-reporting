@@ -1,0 +1,19 @@
+{
+  "reports": [
+    {
+      "report_type": "daily_shop_vt",
+      "shop_ref": "LC HCM 24 Vĩnh Viễn",
+      "deposit_count": 52,
+      "ra_tiem_count": null,
+      "kh_tu_van_count": null,
+      "tich_cuc": "Mặc dù các bạn đã hoàn thành số trước đó nhưng vẫn thoải mái, nhiệt tình tư vấn lên cọc, kết bạn zalo, note vào sổ đầy đủ. Hiểu được tầm quan trọng của việc theo đuổi khách hàng sau này.",
+      "van_de": "Bạn Ngân về kiến thức nguy cơ lợi ích vẫn đang còn yếu cần liên tục hỗ trợ bạn hơn.",
+      "da_lam": null,
+      "revenue_pct": null,
+      "hot_pct": null,
+      "hot_ratio_pct": null,
+      "tb_bill_vnd": null,
+      "customer_count": null
+    }
+  ]
+}

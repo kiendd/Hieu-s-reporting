@@ -1,5 +1,10 @@
 {
   "token": "YOUR_FCHAT_TOKEN_HERE",
   "group": "687d9b9b805279fc03d25365",
-  "api_url": "https://api-chat.fpt.com"
+  "api_url": "https://api-chat.fpt.com",
+  "llm": {
+    "base_url":           "https://api.openai.com/v1",
+    "model":              "gpt-5.4-mini",
+    "structured_outputs": true
+  }
 }

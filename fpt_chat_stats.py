@@ -255,35 +255,13 @@ def _score_weekly_message(content: str) -> int:
     return sum(1 for f in flags if f)
 
 
-_CLASSIFY_RE_COC = re.compile(r"\d+\s*cọc|cọc\s*\d+(?!\d)(?!\s*đ)", re.IGNORECASE)
-_CLASSIFY_RE_TTTC = re.compile(
-    r"\bTTTC\b|TB\s*[Bb]ill|%\s*HT|doanh\s*thu",
-    re.IGNORECASE,
-)
-
-
-def classify_report(content: str) -> str:
-    """Phân loại loại báo cáo: 'shop_vt' | 'tttc' | 'unknown'.
-
-    Dấu hiệu Shop VT mạnh nhất là "N cọc" — có thì trả shop_vt luôn.
-    Nếu không có cọc nhưng có dấu hiệu TTTC (TTTC / TB bill / %HT / doanh thu)
-    thì là tttc. Còn lại → unknown.
-    """
-    if not content:
-        return "unknown"
-    if _CLASSIFY_RE_COC.search(content):
-        return "shop_vt"
-    if _CLASSIFY_RE_TTTC.search(content):
-        return "tttc"
-    return "unknown"
-
-
 # ---------------------------------------------------------------------------
 # ASM Report Analysis
 # ---------------------------------------------------------------------------
 
 def detect_asm_reports(messages: list) -> list:
-    """Lọc tin nhắn TEXT là báo cáo ASM (heuristic: có 'shop' + số cọc)."""
+    """Lọc tin nhắn TEXT là báo cáo ASM (heuristic: có 'shop' + số cọc).
+    Cheap pre-filter — LLM-based extraction handles the real parsing."""
     result = []
     for msg in messages:
         if msg.get("type") != "TEXT":
@@ -295,317 +273,25 @@ def detect_asm_reports(messages: list) -> list:
     return result
 
 
-def _parse_vnd_amount(raw: str, unit_suffix: str | None) -> int | None:
-    """Normalize a Vietnamese-formatted amount string to an integer VND.
+def extract_all_reports(messages: list) -> list:
+    """Pre-filter messages, then LLM-extract each candidate.
 
-    Rules (in order):
-      1. If unit_suffix ∈ {"tr", "M", "triệu"}: scale = 1_000_000.
-         - `,` or `.` followed by 1-3 digits → decimal part.
-         - e.g. "2,2" + "tr" → 2_200_000; "1.625" + "tr" → 1_625_000.
-      2. Without a unit suffix: both `,` and `.` are thousand separators.
-         - e.g. "134.927.000" → 134_927_000; "1.625,000" → 1_625_000.
-      3. If the input is unresolvable (fractional without unit, non-numeric, empty): return None.
-    """
-    if not raw:
-        return None
-    s = raw.strip()
-    if not s:
-        return None
-
-    if unit_suffix in ("tr", "M", "triệu"):
-        # allow one decimal separator of 1-3 digits
-        m = re.fullmatch(r"(\d+)(?:[.,](\d{1,3}))?", s)
-        if not m:
-            return None
-        whole = int(m.group(1))
-        frac  = m.group(2)
-        if frac is None:
-            return whole * 1_000_000
-        # "2,2" → 2.2M; "1.625" → 1.625M
-        scaled = whole * 1_000_000 + int(frac) * (10 ** (6 - len(frac)))
-        return scaled
-
-    # No unit: both . and , are thousand separators
-    if not re.fullmatch(r"\d+(?:[.,]\d+)*", s):
-        return None
-    # Reject if any group after the first has != 3 digits
-    digits_only = re.sub(r"[.,]", "", s)
-    # Require that removing separators leaves pure digits and that each
-    # separated group after the first is exactly 3 digits (thousand grouping).
-    groups = re.split(r"[.,]", s)
-    if len(groups) > 1 and any(len(g) != 3 for g in groups[1:]):
-        return None
-    try:
-        return int(digits_only)
-    except ValueError:
-        return None
-
-
-def _extract_sections(content: str) -> dict:
-    """Trích các mục báo cáo. Hỗ trợ 3 dạng nhãn:
-      - '- Label: content' (bullet)
-      - 'Label: content' (bare, Label bắt đầu bằng chữ cái — hoa hoặc thường)
-      - 'N. Label:' (numbered heading, nội dung nằm ở các bullet theo sau)
-    Trả về dict { label_lower: text } gộp các dòng cho đến nhãn tiếp theo.
-    """
-    # A label-start line is any of:
-    #   - optional `[-–•]` or `N.` prefix
-    #   - followed by a label (2-40 chars, starts with a letter, no ':')
-    #   - followed by ':' or '：'
-    label_re = re.compile(
-        r"""^[ \t]*                              # leading ws
-            (?:[-–•]|\d+\.)?[ \t]*               # optional bullet / number
-            (?P<label>[A-ZÀ-Ỵa-zà-ỵ][^\n:：]{1,40}?)
-            [ \t]*[:：](?!//)[ \t]*              # colon, NOT followed by // (reject URLs)
-            (?P<rest>.*)$                        # same-line content (may be empty)
-        """,
-        re.VERBOSE,
-    )
-
-    sections: dict[str, str] = {}
-    current_label: str | None = None
-    current_buf: list[str] = []
-
-    def flush():
-        nonlocal current_label, current_buf
-        if current_label is not None:
-            sections[current_label] = "\n".join(current_buf).strip()
-        current_label = None
-        current_buf = []
-
-    for line in content.splitlines():
-        m = label_re.match(line)
-        if m:
-            flush()
-            current_label = m.group("label").strip().lower()
-            rest = m.group("rest").strip()
-            current_buf = [rest] if rest else []
-        else:
-            if current_label is not None:
-                current_buf.append(line)
-    flush()
-    return sections
-
-
-def parse_asm_report(msg: dict) -> dict:
-    """Parse một tin nhắn báo cáo ASM, trả về dict các field cấu trúc."""
-    content = msg.get("content") or ""
-    user = msg.get("user") or {}
-
-    shop_match = re.search(r'shop\s*[:：]?\s*([^\n]+)', content, re.IGNORECASE)
-    shop_ref = shop_match.group(1).strip() if shop_match else None
-
-    coc_match = re.search(r'(\d+)\s*cọc|cọc\s*(\d+)', content, re.IGNORECASE)
-    deposit_count = None
-    if coc_match:
-        deposit_count = int(coc_match.group(1) or coc_match.group(2))
-
-    tiem_match = re.search(r'(\d+)\s*ra\s*tiêm', content, re.IGNORECASE)
-    ra_tiem_count = int(tiem_match.group(1)) if tiem_match else None
-
-    sections = _extract_sections(content)
-
-    def get_section(*labels):
-        for lbl in labels:
-            for key in sections:
-                if lbl in key:
-                    return sections[key]
-        return None
-
-    if shop_ref is None or deposit_count is None:
-        print(f"  [!] Không parse được shop/cọc từ message {msg.get('id', '?')}", file=sys.stderr)
-
-    return {
-        "shop_ref": shop_ref,
-        "deposit_count": deposit_count,
-        "ra_tiem_count": ra_tiem_count,
-        "tich_cuc": get_section("tích cực"),
-        "van_de": get_section("vấn đề"),
-        "da_lam": get_section("đã làm"),
-        "sender": user.get("displayName", "Unknown"),
-        "sender_id": user.get("id", ""),
-        "sent_at": msg.get("createdAt", ""),
-        "message_id": msg.get("id", ""),
-    }
-
-
-# ---------------------------------------------------------------------------
-# TTTC Parser (weekly report — weekend shape)
-# ---------------------------------------------------------------------------
-
-# TTTC/VX/LC: not followed by "(" — excludes report-type headers like "TTTC (Thứ 7...)".
-# shop: any content on the same line.
-_TTTC_VENUE_RE = re.compile(
-    r"(?:"
-    r"(TTTC|VX|LC)\s*[:\-]?\s*(?!\s*\()([^\n]+)"   # TTTC/VX/LC not followed by "("
-    r"|shop\s*[:\-]?\s*([^\n]+)"                      # shop: anything
-    r")",
-    re.IGNORECASE,
-)
-
-# Revenue %: require strong context (DT/DS abbreviation, MTD qualifier, center-level phrasing)
-# to avoid matching individual TVV metrics deep in body text.
-_TTTC_REVENUE_PCT_RE = re.compile(
-    r"(?:"
-    r"DT(?!\s*HOT)\b[^%\n]{0,50}?HT\s*:"            # DT … HT: 133%
-    r"|DS\s*T[oổ]ng\b"                                # DS Tổng về 143%
-    r"|%HT\s*ng[àa]y"                                 # %HT ngày: 145%
-    r"|Doanh\s*thu\s*(?:MTD|trong\s*ng[àa]y|ng[àa]y\s*đ[aạ]t)"  # Doanh thu MTD / ngày đạt
-    r"|Trung\s*t[âa]m\s*v[eề]"                       # Trung tâm về 83%
-    r")"
-    r"[^%\n]{0,60}?(\d[\d.,]*)\s*%",
-    re.IGNORECASE,
-)
-
-# HOT achievement %: DT HOT / DS Hot / "Hot đạt|về" at line-start (after optional non-word chars).
-# Bare \bHot\b intentionally removed to avoid false positives in "tỷ trọng HOT",
-# "kèm hot" and similar ratio/narrative contexts.
-_TTTC_HOT_PCT_RE = re.compile(
-    r"(?:"
-    r"DT\s*HOT"                          # DT HOT … 133%
-    r"|DS\s*Hot"                          # DS Hot về 215%
-    r"|(?m:^[^\w\n]*Hot\s+(?:đạt|về)\b)" # Hot đạt / Hot về at line start
-    r")"
-    r"[^%\n]{0,40}?(\d[\d.,]*)\s*%",
-    re.IGNORECASE,
-)
-
-# HOT ratio (tỷ trọng HOT or Doanh thu HH — same concept, different notations).
-# The [^%\n]{0,20}? inside tỷ trọng arm handles "DT" / "doanh thu" inserts between
-# "trọng" and "HOT" (e.g. "Tỉ trọng DT HOT: 51%").
-_TTTC_HOT_RATIO_RE = re.compile(
-    r"(?:"
-    r"[Tt][ỉỷi]\s*tr[oọ]ng[^%\n]{0,20}?HOT"  # Tỷ/Tỉ trọng … HOT (any qualifier)
-    r"|[Dd]oanh\s*thu\s*HH"                    # Doanh thu HH (W8 notation)
-    r"|DT\s*HH"                                 # DT HH shorthand
-    r")"
-    r"[^%\n]{0,15}?(\d[\d.,]*)\s*%",
-    re.IGNORECASE,
-)
-
-_TTTC_TB_BILL_VALUE_RE = re.compile(
-    r"(?:TB\s*[Bb]ill|[Gg]i[aá]\s*tr[iị]\s*bill)[^\d]*([\d.,]+)\s*(tr|M|tri[eệ]u)?",
-    re.IGNORECASE,
-)
-_TTTC_CUSTOMER_RE = re.compile(
-    r"(?:[Ll][ưượ][oợ]t\s*)?(?:KH|kh[aá]ch)\s*mua[^\d]*(\d+)",
-)
-
-# Boundary markers that signal the start of per-TVV narrative sections.
-# Metric searches are restricted to content BEFORE this boundary to avoid
-# capturing individual TVV stats as center-level metrics.
-_TTTC_NARRATIVE_BOUNDARY_RE = re.compile(
-    r"\n[^\n]*(?:t[íi]ch\s*c[ựu]c|v[aấ]n\s*đ[eề]|đi[eể]m\s*s[áa]ng"
-    r"|b[aạ]n\s*tvv|ph[aâ]n\s*t[íi]ch)",
-    re.IGNORECASE,
-)
-
-
-def _first_n_lines(content: str, n: int = 3) -> str:
-    """Return the first n non-empty lines joined by newline."""
+    Returns a flat list of Report dicts (may be longer than candidates because
+    one message can produce multiple reports; may contain unparseable stubs
+    with parse_error set)."""
+    import llm_extractor
     out = []
-    for line in content.splitlines():
-        if line.strip():
-            out.append(line)
-            if len(out) >= n:
-                break
-    return "\n".join(out)
-
-
-def _to_pct(raw: str) -> float | None:
-    """Parse '145' / '128,18' / '133.5' → float percentage, else None."""
-    if not raw:
-        return None
-    s = raw.strip().replace(",", ".")
-    try:
-        return float(s)
-    except ValueError:
-        return None
-
-
-def _tttc_metrics_area(content: str) -> str:
-    """Return the part of content safe for metric extraction.
-
-    Cuts off before per-TVV narrative sections (Tích cực / Vấn đề / Bạn TVV /
-    Phân tích) to prevent individual-TVV metrics from being captured as
-    center-level metrics.  If no such boundary is found the full content is
-    returned (covers flat-narrative templates like W4 and W6).
-    """
-    m = _TTTC_NARRATIVE_BOUNDARY_RE.search(content)
-    if m:
-        return content[:m.start()]
-    return content
-
-
-def parse_tttc_report(msg: dict) -> dict:
-    """Parse một báo cáo TTTC (weekend). Các field metric đều nullable."""
-    content = msg.get("content") or ""
-    user = msg.get("user") or {}
-
-    # Venue: restrict to first 3 non-empty lines to avoid body-text mentions
-    header = _first_n_lines(content, 3)
-    vm = _TTTC_VENUE_RE.search(header)
-    venue = None
-    if vm:
-        # Group 1: TTTC/VX/LC keyword; Group 2: venue after it; Group 3: shop name
-        type_prefix = (vm.group(1) or "shop").strip()
-        name_part = (vm.group(2) or vm.group(3) or "").strip()
-        venue = (type_prefix + " " + name_part).strip()
-
-    # All metric searches operate on the "safe" area before TVV narratives
-    area = _tttc_metrics_area(content)
-
-    rm = _TTTC_REVENUE_PCT_RE.search(area)
-    revenue_pct = _to_pct(rm.group(1)) if rm else None
-
-    hm = _TTTC_HOT_PCT_RE.search(area)
-    hot_pct = _to_pct(hm.group(1)) if hm else None
-
-    hrm = _TTTC_HOT_RATIO_RE.search(area)
-    hot_ratio = _to_pct(hrm.group(1)) if hrm else None
-
-    tb_bill = None
-    tbm = _TTTC_TB_BILL_VALUE_RE.search(area)
-    if tbm:
-        raw_val, unit = tbm.group(1), tbm.group(2)
-        if unit is None and re.match(r'^\d+[.,]\d{1,2}$', raw_val):
-            # "2.2" / "2,3" without explicit unit → implicit millions
-            unit = "M"
-        tb_bill = _parse_vnd_amount(raw_val, unit)
-
-    cm = _TTTC_CUSTOMER_RE.search(area)
-    customer_count = int(cm.group(1)) if cm else None
-
-    sections = _extract_sections(content)
-
-    def get_section(*needles):
-        for needle in needles:
-            for key, val in sections.items():
-                if needle in key:
-                    return val
-        return None
-
-    return {
-        "venue":           venue,
-        "revenue_pct":     revenue_pct,
-        "hot_pct":         hot_pct,
-        "hot_ratio":       hot_ratio,
-        "tb_bill":         tb_bill,
-        "customer_count":  customer_count,
-        "tich_cuc":   get_section("tích cực"),
-        "van_de":     get_section("vấn đề"),
-        "da_lam":     get_section("đã làm"),
-        "giai_phap":  get_section("giải pháp"),
-        "sender":     user.get("displayName", "Unknown"),
-        "sender_id":  user.get("id", ""),
-        "sent_at":    msg.get("createdAt", ""),
-        "message_id": msg.get("id", ""),
-    }
+    for msg in detect_asm_reports(messages):
+        out.extend(llm_extractor.extract_reports(msg))
+    return out
 
 
 def analyze_asm_reports(parsed_reports: list,
                         deposit_low: int = 2, deposit_high: int = 5) -> dict:
-    """Phân tích báo cáo ASM: lọc shop theo đặt cọc, thu thập ý tưởng, highlight."""
+    """Phân tích báo cáo ASM (daily_shop_vt only)."""
+    parsed_reports = [r for r in parsed_reports
+                      if r.get("report_type") == "daily_shop_vt"
+                      and r.get("parse_error") is None]
     all_shops, low_deposit_shops, high_deposit_shops, no_deposit_shops = [], [], [], []
     ideas, tich_cuc_list, han_che_list = [], [], []
     total_deposits = 0
@@ -666,19 +352,22 @@ def analyze_asm_reports(parsed_reports: list,
 
 def analyze_tttc_reports(parsed: list) -> dict:
     """Tổng hợp các TTTC report đã parse. Mọi tỉ số chỉ tính trên non-null."""
+    parsed = [r for r in parsed
+              if r.get("report_type") == "weekend_tttc"
+              and r.get("parse_error") is None]
     def _mean(xs):
         xs = [x for x in xs if x is not None]
         if not xs:
             return None
         return sum(xs) / len(xs)
 
-    avg_tb_bill = _mean([r["tb_bill"] for r in parsed])
+    avg_tb_bill = _mean([r["tb_bill_vnd"] for r in parsed])
     if avg_tb_bill is not None:
         avg_tb_bill = int(round(avg_tb_bill))
 
     avg_revenue_pct = _mean([r["revenue_pct"] for r in parsed])
     avg_hot_pct     = _mean([r["hot_pct"]     for r in parsed])
-    avg_hot_ratio   = _mean([r["hot_ratio"]   for r in parsed])
+    avg_hot_ratio   = _mean([r["hot_ratio_pct"]   for r in parsed])
 
     # Nulls-last stable sort
     def _sort_top(r):
@@ -690,22 +379,28 @@ def analyze_tttc_reports(parsed: list) -> dict:
         return (v is None, (v or 0))
 
     # Shallow-copy so downstream mutation doesn't alias back into parsed_tttc.
-    top    = [{**r} for r in sorted(parsed, key=_sort_top)[:5]]
-    bottom = [{**r} for r in sorted(parsed, key=_sort_bottom)[:5]]
+    # Also project the venue = shop_ref alias so downstream callsites that
+    # still read r["venue"] keep working.
+    def _copy(r):
+        d = {**r}
+        d["venue"] = r.get("shop_ref")
+        return d
+    top    = [_copy(r) for r in sorted(parsed, key=_sort_top)[:5]]
+    bottom = [_copy(r) for r in sorted(parsed, key=_sort_bottom)[:5]]
 
     ideas = [
-        {"sender": r["sender"], "venue": r["venue"],
+        {"sender": r["sender"], "venue": r.get("shop_ref"),
          "da_lam": r["da_lam"], "sent_at": r.get("sent_at", "")}
         for r in parsed
         if r.get("da_lam")
     ]
     tich_cuc = [
-        {"sender": r["sender"], "venue": r["venue"], "content": r["tich_cuc"]}
+        {"sender": r["sender"], "venue": r.get("shop_ref"), "content": r["tich_cuc"]}
         for r in parsed
         if r.get("tich_cuc")
     ]
     han_che = [
-        {"sender": r["sender"], "venue": r["venue"], "content": r["van_de"]}
+        {"sender": r["sender"], "venue": r.get("shop_ref"), "content": r["van_de"]}
         for r in parsed
         if r.get("van_de")
     ]
@@ -730,6 +425,9 @@ def check_asm_compliance(parsed_reports: list, members: list,
                          target_date_str: str, deadline_hhmm: str = "20:00",
                          skip_list: list | None = None) -> list:
     """Trả về displayName của thành viên chưa gửi báo cáo trước deadline."""
+    parsed_reports = [r for r in parsed_reports
+                      if r.get("report_type") == "daily_shop_vt"
+                      and r.get("parse_error") is None]
     VN_OFFSET = 7 * 3600
     try:
         deadline_h, deadline_m = map(int, deadline_hhmm.split(":"))
@@ -768,6 +466,9 @@ def check_late_reporters(parsed_reports: list,
                          target_date_str: str,
                          deadline_hhmm: str = "20:00") -> list:
     """Trả về list {sender, sent_at_vn} của ASM gửi báo cáo SAU deadline."""
+    parsed_reports = [r for r in parsed_reports
+                      if r.get("report_type") == "daily_shop_vt"
+                      and r.get("parse_error") is None]
     VN_OFFSET = 7 * 3600
     try:
         deadline_h, deadline_m = map(int, deadline_hhmm.split(":"))
@@ -797,6 +498,9 @@ def check_late_reporters(parsed_reports: list,
 
 def analyze_multiday(parsed_reports: list, date_from_str: str, date_to_str: str) -> dict:
     """Phân tích báo cáo ASM theo từng ngày trong khoảng nhiều ngày."""
+    parsed_reports = [r for r in parsed_reports
+                      if r.get("report_type") == "daily_shop_vt"
+                      and r.get("parse_error") is None]
     VN_OFFSET = 7 * 3600
 
     d_from = datetime.strptime(date_from_str, "%Y-%m-%d").date()
@@ -977,13 +681,13 @@ def analyze_weekly(messages: list,
     reporters = {r["sender"] for r in reports}
     missing_list = sorted(n for n in member_names if n not in reporters)
 
-    # --- Structured dispatch: parse each qualifying message by kind ---
-    parsed_shop_vt: list[dict] = []
-    parsed_tttc:    list[dict] = []
+    # --- Structured dispatch: LLM extraction, split by report_type ---
+    import llm_extractor
+    parsed_shop_vt: list = []
+    parsed_tttc:    list = []
+    unparseable:    list = []
     for sender, items in by_sender.items():
         for dt, _vn_dt, content in items:
-            # Reconstruct a minimal msg dict for the parsers.
-            # Use the per-message dt so each fake_msg gets a unique id.
             fake_msg = {
                 "content":   content,
                 "user":      {"displayName": sender, "id": ""},
@@ -991,12 +695,13 @@ def analyze_weekly(messages: list,
                 "id":        f"{sender}-{dt.timestamp()}",
                 "type":      "TEXT",
             }
-            kind = classify_report(content)
-            if kind == "shop_vt":
-                parsed_shop_vt.append(parse_asm_report(fake_msg))
-            elif kind == "tttc":
-                parsed_tttc.append(parse_tttc_report(fake_msg))
-            # unknown → dropped from structured pipelines, still in reports[]
+            for r in llm_extractor.extract_reports(fake_msg):
+                if r.get("parse_error") is not None:
+                    unparseable.append(r)
+                elif r["report_type"] == "daily_shop_vt":
+                    parsed_shop_vt.append(r)
+                elif r["report_type"] == "weekend_tttc":
+                    parsed_tttc.append(r)
 
     asm_data  = analyze_asm_reports(parsed_shop_vt) if parsed_shop_vt else None
     tttc_data = analyze_tttc_reports(parsed_tttc)   if parsed_tttc    else None
@@ -1011,6 +716,7 @@ def analyze_weekly(messages: list,
         "tttc_data":      tttc_data,
         "parsed_shop_vt": parsed_shop_vt,
         "parsed_tttc":    parsed_tttc,
+        "unparseable":    unparseable,
     }
 
 
@@ -1449,8 +1155,33 @@ Ví dụ:
                         help="Ngày kiểm tra compliance (mặc định: hôm nay giờ VN)")
     parser.add_argument("--skip-reporters", default="", metavar="NAMES",
                         help="Tên cách nhau bằng dấu phẩy — loại khỏi compliance check")
+    parser.add_argument("--llm-base-url", dest="llm_base_url", default=None,
+                        help="OpenAI-compatible base URL (default: https://api.openai.com/v1)")
+    parser.add_argument("--llm-model", dest="llm_model", default=None,
+                        help="LLM model name (default: gpt-5.4-mini)")
+    parser.add_argument("--llm-structured-outputs",
+                        dest="llm_structured_outputs",
+                        action="store_true", default=None,
+                        help="Use OpenAI structured outputs (json_schema, strict). "
+                             "Only on providers that support it.")
+    parser.add_argument("--no-llm-structured-outputs",
+                        dest="llm_structured_outputs",
+                        action="store_false",
+                        help="Force JSON mode even if config enables structured outputs.")
 
     args = parser.parse_args()
+
+    import llm_extractor
+    _llm_cfg = cfg.get("llm") or {}
+    _so = args.llm_structured_outputs
+    if _so is None and "structured_outputs" in _llm_cfg:
+        _so = bool(_llm_cfg["structured_outputs"])
+    llm_extractor.configure(
+        api_key = _llm_cfg.get("api_key"),
+        base_url= args.llm_base_url or _llm_cfg.get("base_url"),
+        model   = args.llm_model    or _llm_cfg.get("model"),
+        structured_outputs = _so,
+    )
 
     if args.weekly and (args.today or args.date_from or args.date_to or args.date):
         print("Error: --weekly không dùng chung với --today / --from / --to / --date.", file=sys.stderr)
@@ -1577,13 +1308,12 @@ Ví dụ:
     # ── Filter by date range
     messages = filter_by_date(messages, date_from, date_to)
 
-    # ── ASM analysis (always)
-    asm_msgs = detect_asm_reports(messages)
-    print(f"[*] Phát hiện {len(asm_msgs)} báo cáo ASM", file=sys.stderr)
-    if not asm_msgs:
+    # ── ASM analysis (always) — LLM extraction handles classification + extract
+    parsed_reports = extract_all_reports(messages)
+    print(f"[*] Trích xuất {len(parsed_reports)} báo cáo (qua LLM)", file=sys.stderr)
+    if not parsed_reports:
         print("  [!] Không tìm thấy báo cáo ASM nào.", file=sys.stderr)
 
-    parsed_reports = [parse_asm_report(m) for m in asm_msgs]
     asm_data = analyze_asm_reports(parsed_reports,
                                    deposit_low=args.deposit_low,
                                    deposit_high=args.deposit_high)
@@ -1611,6 +1341,8 @@ Ví dụ:
     if args.excel:
         write_asm_excel(asm_data, args.excel)
         print(f"[✓] Đã xuất Excel → {args.excel}", file=sys.stderr)
+
+    print(llm_extractor.format_stats(), file=sys.stderr)
 
 
 if __name__ == "__main__":

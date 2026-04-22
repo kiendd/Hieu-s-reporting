@@ -1,0 +1,19 @@
+{
+  "reports": [
+    {
+      "report_type": "weekend_tttc",
+      "shop_ref": "58149 HCM 406B Trương Công Định, P. Tam Thắng",
+      "deposit_count": null,
+      "ra_tiem_count": null,
+      "kh_tu_van_count": null,
+      "tich_cuc": "Ba bạn tư vấn đang cố gắng học hỏi và có cải thiện từng ngày. Bác sĩ cứng, kỹ năng tư vấn tốt hỗ trợ bọc lót thêm cho TVV up-sell.",
+      "van_de": "Doanh thu trung bình shop chưa đạt hôm nay chưa về số, chỉ số HPV kèm HOT chưa cao.; Nhân sự shop: Bạn Diệu Tâm chưa khai thác kỹ CTKM, và up Bill chưa tốt, Hai bạn tư vấn Phạm Ngọc Yến Vy và Trần Ngọc Minh Thư TVV cũ, kỹ năng tư vấn khá tốt tuy nhiên TBB cũng chưa đạt >2,2M cần đẩy mạnh tư vấn kỹ CT GDLS1.",
+      "da_lam": "hướng dẫn tư vấn viên tư vấn kỹ CTKM và GDLS1, đẩy mạnh gói Nhi >10M, và xử lý tình huống, hỗ trợ tư vấn cài sổ TCĐT và tư vấn tính năng \"Mẹ và bé\".",
+      "revenue_pct": 83.0,
+      "hot_pct": null,
+      "hot_ratio_pct": 74.6,
+      "tb_bill_vnd": 2248153,
+      "customer_count": 40
+    }
+  ]
+}

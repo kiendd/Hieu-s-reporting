@@ -1,0 +1,19 @@
+{
+  "reports": [
+    {
+      "report_type": "daily_shop_vt",
+      "shop_ref": "223B Cống Quỳnh",
+      "deposit_count": 27,
+      "ra_tiem_count": 3,
+      "kh_tu_van_count": 340,
+      "tich_cuc": "Nhân viên có chủ động tư vấn vaccine, có tư vấn lối sống hơn, có phát sinh đơn cọc tiền mang thai, dại nhưng do khách có tiền sử dị ứng thuốc nên không tiêm được. Nay có khách của shop này ra thanh toán từng phần 2 gói HPV",
+      "van_de": "Chưa tập trung, chưa quen cần thời gian trau dồi, tập nói hơn",
+      "da_lam": "Nhân viên chia sẻ gặp khó khăn trong việc chuyển thuốc, lối sống sang vaccine --> Đã hướng dẫn các bạn",
+      "revenue_pct": null,
+      "hot_pct": null,
+      "hot_ratio_pct": null,
+      "tb_bill_vnd": null,
+      "customer_count": null
+    }
+  ]
+}
