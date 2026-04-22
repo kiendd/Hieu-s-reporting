@@ -21,6 +21,9 @@ import sys
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date as _date, datetime, timedelta, time, timezone
+from typing import Literal
+
+ReportType = Literal["daily_shop_vt", "weekend_tttc"]
 
 try:
     import requests
@@ -458,6 +461,11 @@ def analyze_tttc_reports(parsed: list) -> dict:
             "han_che":  han_che,
         },
     }
+
+
+def report_type_for_date(target_date: _date) -> ReportType:
+    """Mon-Fri (weekday 0-4) → Shop VT daily; Sat-Sun (5-6) → TTTC weekend."""
+    return "daily_shop_vt" if target_date.weekday() < 5 else "weekend_tttc"
 
 
 def check_asm_compliance(parsed_reports: list, members: list,

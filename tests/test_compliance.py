@@ -58,3 +58,21 @@ class TestDetectReportCandidates:
     def test_strip_diacritics(self):
         assert _strip_diacritics("Cọc Việt Nam") == "coc viet nam"
         assert _strip_diacritics("ĐÃ LÀM") == "da lam"
+
+
+from datetime import date
+from fpt_chat_stats import report_type_for_date
+
+
+class TestReportTypeForDate:
+    def test_monday_returns_daily(self):
+        assert report_type_for_date(date(2026, 4, 20)) == "daily_shop_vt"
+
+    def test_friday_returns_daily(self):
+        assert report_type_for_date(date(2026, 4, 17)) == "daily_shop_vt"
+
+    def test_saturday_returns_weekend(self):
+        assert report_type_for_date(date(2026, 4, 18)) == "weekend_tttc"
+
+    def test_sunday_returns_weekend(self):
+        assert report_type_for_date(date(2026, 4, 19)) == "weekend_tttc"
