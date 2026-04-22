@@ -567,10 +567,13 @@ def check_late_reporters(parsed_reports: list,
 
 
 def analyze_multiday(parsed_reports: list, date_from_str: str, date_to_str: str) -> dict:
-    """Phân tích báo cáo ASM theo từng ngày trong khoảng nhiều ngày."""
+    """Phân tích báo cáo ASM theo từng ngày trong khoảng nhiều ngày.
+
+    Per-day routing: T2-T6 nhận daily_shop_vt, T7-CN nhận weekend_tttc.
+    """
     parsed_reports = [r for r in parsed_reports
-                      if r.get("report_type") == "daily_shop_vt"
-                      and r.get("parse_error") is None]
+                      if r.get("parse_error") is None
+                      and r.get("report_type") in ("daily_shop_vt", "weekend_tttc")]
     VN_OFFSET = 7 * 3600
 
     d_from = datetime.strptime(date_from_str, "%Y-%m-%d").date()
@@ -578,15 +581,18 @@ def analyze_multiday(parsed_reports: list, date_from_str: str, date_to_str: str)
     total_days = (d_to - d_from).days + 1
     all_dates  = [d_from + timedelta(days=i) for i in range(total_days)]
 
-    # Group reports by (date, sender)
+    # Group reports by (date, sender) — per-day routing by weekday
     by_date: dict[_date, list] = {d: [] for d in all_dates}
     for r in parsed_reports:
         dt = parse_dt(r.get("sent_at", ""))
         if not dt:
             continue
         vn_dt = datetime.fromtimestamp(dt.timestamp() + VN_OFFSET, tz=timezone.utc)
-        if d_from <= vn_dt.date() <= d_to:
-            by_date[vn_dt.date()].append(r)
+        if not (d_from <= vn_dt.date() <= d_to):
+            continue
+        if r["report_type"] != report_type_for_date(vn_dt.date()):
+            continue
+        by_date[vn_dt.date()].append(r)
 
     # All senders who appeared at least once
     all_senders = sorted({r["sender"] for r in parsed_reports if r.get("sender")})

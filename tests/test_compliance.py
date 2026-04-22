@@ -252,3 +252,26 @@ class TestCheckLateReporters:
             reports, "2026-04-20", report_type="daily_shop_vt",
         )
         assert late == []
+
+
+from fpt_chat_stats import analyze_multiday
+
+
+class TestAnalyzeMultidayRoutesPerDay:
+    def test_picks_daily_for_weekday_and_tttc_for_weekend(self):
+        """Across Fri-Sat, daily_shop_vt counts on Fri, weekend_tttc on Sat."""
+        reports = [
+            # Fri 17/04 — Shop VT
+            {"report_type": "daily_shop_vt", "sender": "Alice",
+             "sent_at": "2026-04-17T10:00:00Z", "parse_error": None,
+             "deposit_count": 5, "ra_tiem_count": 2},
+            # Sat 18/04 — TTTC (currently dropped because filter is hardcoded)
+            {"report_type": "weekend_tttc", "sender": "Alice",
+             "sent_at": "2026-04-18T10:00:00Z", "parse_error": None,
+             "deposit_count": None, "ra_tiem_count": None},
+        ]
+        out = analyze_multiday(reports, "2026-04-17", "2026-04-18")
+        # Both days should have a reporter (Alice on Fri via Shop VT, Sat via TTTC)
+        days = {d["date"]: d for d in out["daily_summary"]}
+        assert days["2026-04-17"]["reporter_count"] == 1
+        assert days["2026-04-18"]["reporter_count"] == 1
