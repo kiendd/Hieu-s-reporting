@@ -713,7 +713,7 @@ def analyze_weekly(messages: list,
     member_names = sorted({
         (m.get("displayName") or "").strip()
         for m in group_members
-        if (m.get("displayName") or "").strip()
+        if _is_active_member(m) and (m.get("displayName") or "").strip()
     })
     member_set = set(member_names)
 
@@ -1088,7 +1088,7 @@ def write_weekly_excel(data: dict, group_members: list, path) -> None:
     member_names = sorted({
         (m.get("displayName") or "").strip()
         for m in group_members
-        if (m.get("displayName") or "").strip()
+        if _is_active_member(m) and (m.get("displayName") or "").strip()
     })
 
     def _row_for(name: str):
