@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -18,6 +19,21 @@ from pathlib import Path
 PROMPT_VERSION = "v1"
 DEFAULT_MODEL = "gpt-5.4-mini"
 DEFAULT_STRUCTURED_OUTPUTS = True
+DEFAULT_MAX_WORKERS = 4
+
+
+def _read_max_workers() -> int:
+    """Concurrent LLM worker count for extract_all_reports. Env
+    `LLM_MAX_WORKERS` overrides default. Clamp to [1, 32] — 1 disables
+    parallelism, upper bound protects against runaway config."""
+    v = os.environ.get("LLM_MAX_WORKERS")
+    if v is None:
+        return DEFAULT_MAX_WORKERS
+    try:
+        n = int(v)
+    except ValueError:
+        return DEFAULT_MAX_WORKERS
+    return max(1, min(32, n))
 
 
 def _read_structured_outputs_flag() -> bool:
@@ -94,15 +110,23 @@ def _save_cache(content: str, reports: list[dict]) -> None:
 
 
 _stats = {"llm_call": 0, "llm_cached": 0, "llm_error": 0}
+_STATS_LOCK = threading.Lock()
+
+
+def _bump_stat(key: str) -> None:
+    with _STATS_LOCK:
+        _stats[key] += 1
 
 
 def _reset_stats() -> None:
-    for k in _stats:
-        _stats[k] = 0
+    with _STATS_LOCK:
+        for k in _stats:
+            _stats[k] = 0
 
 
 def get_stats() -> dict[str, int]:
-    return dict(_stats)
+    with _STATS_LOCK:
+        return dict(_stats)
 
 
 def format_stats() -> str:
@@ -425,21 +449,21 @@ def extract_reports(msg: dict) -> list[Report]:
 
     cached = _load_cache(content)
     if cached is not None:
-        _stats["llm_cached"] += 1
+        _bump_stat("llm_cached")
         return [_hydrate(r, msg, source="cache") for r in cached]
 
     try:
         extracted = _llm_call(content)
     except (LLMParseError, LLMConfigError) as e:
-        _stats["llm_error"] += 1
+        _bump_stat("llm_error")
         return [_unparseable_stub(msg, reason=str(e))]
     except Exception as e:
-        _stats["llm_error"] += 1
+        _bump_stat("llm_error")
         print(f"[llm] unexpected error on {msg.get('id','?')}: {e!r}",
               file=sys.stderr)
         return [_unparseable_stub(msg, reason=f"unexpected: {type(e).__name__}")]
 
-    _stats["llm_call"] += 1
+    _bump_stat("llm_call")
     _save_cache(content, extracted)
     return [_hydrate(r, msg, source="llm") for r in extracted]
 
@@ -447,7 +471,8 @@ def extract_reports(msg: dict) -> list[Report]:
 def configure(api_key: str | None = None,
               base_url: str | None = None,
               model: str | None = None,
-              structured_outputs: bool | None = None) -> None:
+              structured_outputs: bool | None = None,
+              max_workers: int | None = None) -> None:
     """Set env vars that _get_client / _llm_call read. Idempotent. Any
     non-None argument overwrites the existing env value; None leaves it
     alone (so env vars from shell still win when CLI/UI don't set them)."""
@@ -459,4 +484,6 @@ def configure(api_key: str | None = None,
         os.environ["LLM_MODEL"] = model
     if structured_outputs is not None:
         os.environ["LLM_STRUCTURED_OUTPUTS"] = "1" if structured_outputs else "0"
+    if max_workers is not None:
+        os.environ["LLM_MAX_WORKERS"] = str(max_workers)
     _reset_client_cache()
