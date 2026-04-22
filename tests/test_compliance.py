@@ -76,3 +76,24 @@ class TestReportTypeForDate:
 
     def test_sunday_returns_weekend(self):
         assert report_type_for_date(date(2026, 4, 19)) == "weekend_tttc"
+
+
+from fpt_chat_stats import _is_active_member
+
+
+class TestIsActiveMember:
+    def test_active_member_with_lastread(self):
+        assert _is_active_member({"lastReadMessageId": 103}) is True
+
+    def test_zombie_lastread_zero(self):
+        assert _is_active_member({"lastReadMessageId": 0}) is False
+
+    def test_zombie_lastread_missing(self):
+        assert _is_active_member({}) is False
+
+    def test_zombie_lastread_none(self):
+        assert _is_active_member({"lastReadMessageId": None}) is False
+
+    def test_active_low_lastread(self):
+        # Even reading 1 message qualifies as active
+        assert _is_active_member({"lastReadMessageId": 1}) is True

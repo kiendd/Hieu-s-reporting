@@ -468,6 +468,16 @@ def report_type_for_date(target_date: _date) -> ReportType:
     return "daily_shop_vt" if target_date.weekday() < 5 else "weekend_tttc"
 
 
+def _is_active_member(m: dict) -> bool:
+    """Active = đã từng đọc tin nhắn trong group.
+
+    Loại zombie account (data quality issue: cùng người có 2 user record,
+    1 active + 1 zombie với lastReadMessageId=0). Chỉ dùng cho compliance —
+    KHÔNG dùng cho display/sender lookup.
+    """
+    return (m.get("lastReadMessageId") or 0) > 0
+
+
 def check_asm_compliance(parsed_reports: list, members: list,
                          target_date_str: str, deadline_hhmm: str = "20:00",
                          skip_list: list | None = None) -> list:
