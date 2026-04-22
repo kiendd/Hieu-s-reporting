@@ -167,9 +167,11 @@ if not st.session_state.ls_loaded:
 # ── Token ─────────────────────────────────────────────────────────────────────
 
 _saved_token = _ls_get("fpt_token")
-_saved_llm_key      = _ls_get("fpt_llm_api_key")
-_saved_llm_base_url = _ls_get("fpt_llm_base_url") or "https://api.openai.com/v1"
-_saved_llm_model    = _ls_get("fpt_llm_model")    or "gpt-4o-mini"
+_saved_llm_key       = _ls_get("fpt_llm_api_key")
+_saved_llm_base_url  = _ls_get("fpt_llm_base_url") or "https://api.openai.com/v1"
+_saved_llm_model     = _ls_get("fpt_llm_model")    or "gpt-5.4-mini"
+_raw_structout = (_ls_get("fpt_llm_structured_outputs") or "").strip().lower()
+_saved_llm_structout = True if _raw_structout == "" else _raw_structout in ("1", "true", "yes", "on")
 
 # ── Page header ───────────────────────────────────────────────────────────────
 
@@ -835,16 +837,25 @@ with st.sidebar:
         "API key", value=_saved_llm_key, type="password",
         help="Lưu trong localStorage trình duyệt — không ghi ra config.json",
     )
+    _llm_structout = st.checkbox(
+        "Structured outputs",
+        value=_saved_llm_structout,
+        help="Dùng response_format=json_schema (strict). Chỉ bật khi "
+             "provider hỗ trợ (OpenAI gpt-4o-2024-08-06+ / 4.1+ / 5+).",
+    )
     if _llm_api_key:
         _ls_set("fpt_llm_api_key", _llm_api_key)
     if _llm_base_url != _saved_llm_base_url:
         _ls_set("fpt_llm_base_url", _llm_base_url)
     if _llm_model != _saved_llm_model:
         _ls_set("fpt_llm_model", _llm_model)
+    if _llm_structout != _saved_llm_structout:
+        _ls_set("fpt_llm_structured_outputs", "1" if _llm_structout else "0")
     llm_extractor.configure(
         api_key=_llm_api_key or None,
         base_url=_llm_base_url or None,
         model=_llm_model or None,
+        structured_outputs=_llm_structout,
     )
     _stats = llm_extractor.get_stats()
     if sum(_stats.values()) > 0:

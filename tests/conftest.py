@@ -26,9 +26,11 @@ def fake_openai(monkeypatch):
             self.queue: list = []
             self.errors: list = []
             self.calls = 0
+            self.last_kwargs: dict = {}
 
         def create(self, **kwargs):
             self.calls += 1
+            self.last_kwargs = kwargs
             if self.errors:
                 raise self.errors.pop(0)
             if not self.queue:

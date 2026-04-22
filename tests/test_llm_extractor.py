@@ -350,3 +350,75 @@ def test_configure_sets_env_and_clears_client(monkeypatch):
     assert os.environ["OPENAI_BASE_URL"] == "https://x/v1"
     assert os.environ["LLM_MODEL"] == "gpt-foo"
     assert le._client_cache == {}
+
+
+# ─── Structured outputs ──────────────────────────────────────────────────────
+
+def test_json_schema_covers_every_field():
+    """Strict mode requires every report field in `required` with
+    additionalProperties:false. Guard against drift when new fields land."""
+    schema = le._JSON_SCHEMA
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == {"reports", "unparseable", "reason"}
+
+    item = schema["properties"]["reports"]["items"]
+    assert item["additionalProperties"] is False
+    expected_fields = (
+        {"report_type"}
+        | set(le._STRING_FIELDS)
+        | set(le._NUMERIC_INT_FIELDS)
+        | set(le._NUMERIC_FLOAT_FIELDS)
+    )
+    assert set(item["required"]) == expected_fields
+    assert set(item["properties"].keys()) == expected_fields
+    assert item["properties"]["report_type"]["enum"] == [
+        "daily_shop_vt", "weekend_tttc",
+    ]
+
+
+def test_llm_call_uses_json_schema_by_default(monkeypatch, fake_openai, tmp_cache):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("LLM_STRUCTURED_OUTPUTS", raising=False)
+    fake_openai.chat.completions.queue.append(
+        {"reports": [], "unparseable": False, "reason": None}
+    )
+    le._llm_call("any content")
+    rf = fake_openai.chat.completions.last_kwargs["response_format"]
+    assert rf["type"] == "json_schema"
+    assert rf["json_schema"]["strict"] is True
+    assert rf["json_schema"]["name"] == "reports_extraction"
+    assert rf["json_schema"]["schema"] is le._JSON_SCHEMA
+
+
+def test_llm_call_uses_json_object_when_flag_disabled(monkeypatch, fake_openai, tmp_cache):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("LLM_STRUCTURED_OUTPUTS", "0")
+    fake_openai.chat.completions.queue.append(
+        {"reports": [], "unparseable": False, "reason": None}
+    )
+    le._llm_call("any content")
+    rf = fake_openai.chat.completions.last_kwargs["response_format"]
+    assert rf == {"type": "json_object"}
+
+
+def test_read_structured_outputs_flag_truthy_parsing(monkeypatch):
+    monkeypatch.delenv("LLM_STRUCTURED_OUTPUTS", raising=False)
+    assert le._read_structured_outputs_flag() is True  # default is now on
+    for v in ("1", "true", "TRUE", "yes", "on", "  True  "):
+        monkeypatch.setenv("LLM_STRUCTURED_OUTPUTS", v)
+        assert le._read_structured_outputs_flag() is True, v
+    for v in ("0", "false", "no", "off", ""):
+        monkeypatch.setenv("LLM_STRUCTURED_OUTPUTS", v)
+        assert le._read_structured_outputs_flag() is False, v
+
+
+def test_configure_sets_structured_outputs_env(monkeypatch):
+    monkeypatch.delenv("LLM_STRUCTURED_OUTPUTS", raising=False)
+    le.configure(structured_outputs=True)
+    assert os.environ["LLM_STRUCTURED_OUTPUTS"] == "1"
+    le.configure(structured_outputs=False)
+    assert os.environ["LLM_STRUCTURED_OUTPUTS"] == "0"
+    # None leaves the env untouched.
+    prev = os.environ["LLM_STRUCTURED_OUTPUTS"]
+    le.configure(structured_outputs=None)
+    assert os.environ["LLM_STRUCTURED_OUTPUTS"] == prev

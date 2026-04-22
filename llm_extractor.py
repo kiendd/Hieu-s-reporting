@@ -16,7 +16,18 @@ from pathlib import Path
 
 
 PROMPT_VERSION = "v1"
-DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_MODEL = "gpt-5.4-mini"
+DEFAULT_STRUCTURED_OUTPUTS = True
+
+
+def _read_structured_outputs_flag() -> bool:
+    """Truthy env var `LLM_STRUCTURED_OUTPUTS` enables OpenAI structured
+    outputs (response_format=json_schema). Default False for broadest
+    provider compatibility."""
+    v = os.environ.get("LLM_STRUCTURED_OUTPUTS")
+    if v is None:
+        return DEFAULT_STRUCTURED_OUTPUTS
+    return v.strip().lower() in ("1", "true", "yes", "on")
 
 
 class Report(TypedDict):
@@ -163,6 +174,45 @@ _NUMERIC_FLOAT_FIELDS = ("revenue_pct", "hot_pct", "hot_ratio_pct")
 _STRING_FIELDS = ("shop_ref", "tich_cuc", "van_de", "da_lam")
 
 
+def _build_json_schema() -> dict:
+    """JSON Schema for OpenAI structured outputs (strict mode).
+
+    Strict mode requires every property in `required` and
+    `additionalProperties: false`; optionality is expressed as a
+    null union (`["integer", "null"]`) rather than by omitting the key.
+    """
+    report_props: dict[str, dict] = {
+        "report_type": {"type": "string",
+                        "enum": ["daily_shop_vt", "weekend_tttc"]},
+    }
+    for fld in _STRING_FIELDS:
+        report_props[fld] = {"type": ["string", "null"]}
+    for fld in _NUMERIC_INT_FIELDS:
+        report_props[fld] = {"type": ["integer", "null"]}
+    for fld in _NUMERIC_FLOAT_FIELDS:
+        report_props[fld] = {"type": ["number", "null"]}
+
+    report_item = {
+        "type": "object",
+        "properties": report_props,
+        "required": list(report_props.keys()),
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "reports": {"type": "array", "items": report_item},
+            "unparseable": {"type": "boolean"},
+            "reason": {"type": ["string", "null"]},
+        },
+        "required": ["reports", "unparseable", "reason"],
+        "additionalProperties": False,
+    }
+
+
+_JSON_SCHEMA = _build_json_schema()
+
+
 def _coerce_int(v: object) -> int | None:
     if v is None:
         return None
@@ -276,12 +326,24 @@ def _llm_call(content: str) -> list[dict]:
     ]
     retriable = tuple(e for e, _, _ in attempts)
 
+    if _read_structured_outputs_flag():
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "reports_extraction",
+                "schema": _JSON_SCHEMA,
+                "strict": True,
+            },
+        }
+    else:
+        response_format = {"type": "json_object"}
+
     for attempt in range(5):   # max total tries
         try:
             resp = client.chat.completions.create(
                 model=model,
                 temperature=0,
-                response_format={"type": "json_object"},
+                response_format=response_format,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user",   "content": content},
@@ -384,7 +446,8 @@ def extract_reports(msg: dict) -> list[Report]:
 
 def configure(api_key: str | None = None,
               base_url: str | None = None,
-              model: str | None = None) -> None:
+              model: str | None = None,
+              structured_outputs: bool | None = None) -> None:
     """Set env vars that _get_client / _llm_call read. Idempotent. Any
     non-None argument overwrites the existing env value; None leaves it
     alone (so env vars from shell still win when CLI/UI don't set them)."""
@@ -394,4 +457,6 @@ def configure(api_key: str | None = None,
         os.environ["OPENAI_BASE_URL"] = base_url
     if model is not None:
         os.environ["LLM_MODEL"] = model
+    if structured_outputs is not None:
+        os.environ["LLM_STRUCTURED_OUTPUTS"] = "1" if structured_outputs else "0"
     _reset_client_cache()
