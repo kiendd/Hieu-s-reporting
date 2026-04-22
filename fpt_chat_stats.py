@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date as _date, datetime, timedelta, time, timezone
 
@@ -260,18 +261,45 @@ def _score_weekly_message(content: str) -> int:
 # ASM Report Analysis
 # ---------------------------------------------------------------------------
 
-def detect_asm_reports(messages: list) -> list:
-    """Lọc tin nhắn TEXT là báo cáo ASM (heuristic: có 'shop' + số cọc).
-    Cheap pre-filter — LLM-based extraction handles the real parsing."""
-    result = []
+_REPORT_KEYWORDS = (
+    "shop", "tttc", "vx hcm", "coc",
+    "doanh thu", "dt %", "hot", "ra tiem",
+    "tvv", "tu van", "kh", "bill",
+)
+
+
+def _strip_diacritics(s: str) -> str:
+    """Lower + strip Vietnamese diacritics for keyword matching tolerance.
+
+    `đ`/`Đ` handled explicitly because NFKD doesn't decompose them — they're
+    base letters (U+0111 / U+0110), not composed of d + combining mark.
+    """
+    lowered = s.lower().replace("đ", "d")
+    nfkd = unicodedata.normalize("NFKD", lowered)
+    return "".join(c for c in nfkd if not unicodedata.combining(c))
+
+
+def detect_report_candidates(messages: list) -> list:
+    """L2 heuristic pre-filter: length ≥ 80 + ≥ 2 digits + ≥ 1 keyword.
+
+    Cheap signal — LLM extraction phía sau quyết định loại + parse fields.
+    Diacritic-insensitive keyword match (user gõ thiếu dấu vẫn pass).
+    """
+    out = []
+    digit_re = re.compile(r"\d")
     for msg in messages:
         if msg.get("type") != "TEXT":
             continue
         content = msg.get("content") or ""
-        if (re.search(r'shop', content, re.IGNORECASE)
-                and re.search(r'\d+\s*cọc|cọc\s*\d+', content, re.IGNORECASE)):
-            result.append(msg)
-    return result
+        if len(content) < 80:
+            continue
+        if len(digit_re.findall(content)) < 2:
+            continue
+        normalized = _strip_diacritics(content)
+        if not any(kw in normalized for kw in _REPORT_KEYWORDS):
+            continue
+        out.append(msg)
+    return out
 
 
 def extract_all_reports(messages: list) -> list:
@@ -286,7 +314,7 @@ def extract_all_reports(messages: list) -> list:
     one message can produce multiple reports; may contain unparseable stubs
     with parse_error set)."""
     import llm_extractor
-    candidates = detect_asm_reports(messages)
+    candidates = detect_report_candidates(messages)
     if not candidates:
         return []
     workers = min(llm_extractor._read_max_workers(), len(candidates))
