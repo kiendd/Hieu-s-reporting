@@ -307,7 +307,7 @@ else:
         with c_del:
             if st.button("🗑", key=f"del_{i}", use_container_width=True, help="Xóa nhóm"):
                 st.session_state.library.pop(i)
-                _lib_save(st.session_state.library)
+                st.session_state.needs_save = True
                 st.rerun()
 
 # Flush deferred localStorage write (must happen in main body, not inside @st.dialog)
