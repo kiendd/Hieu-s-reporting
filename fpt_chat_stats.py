@@ -18,8 +18,12 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date as _date, datetime, timedelta, time, timezone
+from typing import Literal
+
+ReportType = Literal["daily_shop_vt", "weekend_tttc"]
 
 try:
     import requests
@@ -260,18 +264,45 @@ def _score_weekly_message(content: str) -> int:
 # ASM Report Analysis
 # ---------------------------------------------------------------------------
 
-def detect_asm_reports(messages: list) -> list:
-    """Lọc tin nhắn TEXT là báo cáo ASM (heuristic: có 'shop' + số cọc).
-    Cheap pre-filter — LLM-based extraction handles the real parsing."""
-    result = []
+_REPORT_KEYWORDS = (
+    "shop", "tttc", "vx hcm", "coc",
+    "doanh thu", "dt %", "hot", "ra tiem",
+    "tvv", "tu van", "kh", "bill",
+)
+
+
+def _strip_diacritics(s: str) -> str:
+    """Lower + strip Vietnamese diacritics for keyword matching tolerance.
+
+    `đ`/`Đ` handled explicitly because NFKD doesn't decompose them — they're
+    base letters (U+0111 / U+0110), not composed of d + combining mark.
+    """
+    lowered = s.lower().replace("đ", "d")
+    nfkd = unicodedata.normalize("NFKD", lowered)
+    return "".join(c for c in nfkd if not unicodedata.combining(c))
+
+
+def detect_report_candidates(messages: list) -> list:
+    """L2 heuristic pre-filter: length ≥ 80 + ≥ 2 digits + ≥ 1 keyword.
+
+    Cheap signal — LLM extraction phía sau quyết định loại + parse fields.
+    Diacritic-insensitive keyword match (user gõ thiếu dấu vẫn pass).
+    """
+    out = []
+    digit_re = re.compile(r"\d")
     for msg in messages:
         if msg.get("type") != "TEXT":
             continue
         content = msg.get("content") or ""
-        if (re.search(r'shop', content, re.IGNORECASE)
-                and re.search(r'\d+\s*cọc|cọc\s*\d+', content, re.IGNORECASE)):
-            result.append(msg)
-    return result
+        if len(content) < 80:
+            continue
+        if len(digit_re.findall(content)) < 2:
+            continue
+        normalized = _strip_diacritics(content)
+        if not any(kw in normalized for kw in _REPORT_KEYWORDS):
+            continue
+        out.append(msg)
+    return out
 
 
 def extract_all_reports(messages: list) -> list:
@@ -286,7 +317,7 @@ def extract_all_reports(messages: list) -> list:
     one message can produce multiple reports; may contain unparseable stubs
     with parse_error set)."""
     import llm_extractor
-    candidates = detect_asm_reports(messages)
+    candidates = detect_report_candidates(messages)
     if not candidates:
         return []
     workers = min(llm_extractor._read_max_workers(), len(candidates))
@@ -432,13 +463,36 @@ def analyze_tttc_reports(parsed: list) -> dict:
     }
 
 
+def report_type_for_date(target_date: _date) -> ReportType:
+    """Mon-Fri (weekday 0-4) → Shop VT daily; Sat-Sun (5-6) → TTTC weekend."""
+    return "daily_shop_vt" if target_date.weekday() < 5 else "weekend_tttc"
+
+
+def _is_active_member(m: dict) -> bool:
+    """Active = đã từng đọc tin nhắn trong group.
+
+    Loại zombie account (data quality issue: cùng người có 2 user record,
+    1 active + 1 zombie với lastReadMessageId=0). Chỉ dùng cho compliance —
+    KHÔNG dùng cho display/sender lookup.
+    """
+    return (m.get("lastReadMessageId") or 0) > 0
+
+
 def check_asm_compliance(parsed_reports: list, members: list,
-                         target_date_str: str, deadline_hhmm: str = "20:00",
+                         target_date_str: str,
+                         report_type: ReportType,
+                         deadline_hhmm: str = "20:00",
                          skip_list: list | None = None) -> list:
-    """Trả về displayName của thành viên chưa gửi báo cáo trước deadline."""
+    """Trả về displayName của thành viên chưa gửi báo cáo trước deadline.
+
+    `report_type` REQUIRED — caller phải route theo weekday (xem
+    `report_type_for_date`). Default sẽ tạo silent bug khi quên route.
+    Members có lastReadMessageId=0 bị filter (zombie account).
+    """
     parsed_reports = [r for r in parsed_reports
-                      if r.get("report_type") == "daily_shop_vt"
+                      if r.get("report_type") == report_type
                       and r.get("parse_error") is None]
+    members = [m for m in members if _is_active_member(m)]
     VN_OFFSET = 7 * 3600
     try:
         deadline_h, deadline_m = map(int, deadline_hhmm.split(":"))
@@ -475,10 +529,15 @@ def check_asm_compliance(parsed_reports: list, members: list,
 
 def check_late_reporters(parsed_reports: list,
                          target_date_str: str,
+                         report_type: ReportType,
                          deadline_hhmm: str = "20:00") -> list:
-    """Trả về list {sender, sent_at_vn} của ASM gửi báo cáo SAU deadline."""
+    """Trả về list {sender, sent_at_vn} của ASM gửi báo cáo SAU deadline.
+
+    `report_type` REQUIRED — caller route theo weekday (xem
+    `report_type_for_date`).
+    """
     parsed_reports = [r for r in parsed_reports
-                      if r.get("report_type") == "daily_shop_vt"
+                      if r.get("report_type") == report_type
                       and r.get("parse_error") is None]
     VN_OFFSET = 7 * 3600
     try:
@@ -508,10 +567,13 @@ def check_late_reporters(parsed_reports: list,
 
 
 def analyze_multiday(parsed_reports: list, date_from_str: str, date_to_str: str) -> dict:
-    """Phân tích báo cáo ASM theo từng ngày trong khoảng nhiều ngày."""
+    """Phân tích báo cáo ASM theo từng ngày trong khoảng nhiều ngày.
+
+    Per-day routing: T2-T6 nhận daily_shop_vt, T7-CN nhận weekend_tttc.
+    """
     parsed_reports = [r for r in parsed_reports
-                      if r.get("report_type") == "daily_shop_vt"
-                      and r.get("parse_error") is None]
+                      if r.get("parse_error") is None
+                      and r.get("report_type") in ("daily_shop_vt", "weekend_tttc")]
     VN_OFFSET = 7 * 3600
 
     d_from = datetime.strptime(date_from_str, "%Y-%m-%d").date()
@@ -519,15 +581,18 @@ def analyze_multiday(parsed_reports: list, date_from_str: str, date_to_str: str)
     total_days = (d_to - d_from).days + 1
     all_dates  = [d_from + timedelta(days=i) for i in range(total_days)]
 
-    # Group reports by (date, sender)
+    # Group reports by (date, sender) — per-day routing by weekday
     by_date: dict[_date, list] = {d: [] for d in all_dates}
     for r in parsed_reports:
         dt = parse_dt(r.get("sent_at", ""))
         if not dt:
             continue
         vn_dt = datetime.fromtimestamp(dt.timestamp() + VN_OFFSET, tz=timezone.utc)
-        if d_from <= vn_dt.date() <= d_to:
-            by_date[vn_dt.date()].append(r)
+        if not (d_from <= vn_dt.date() <= d_to):
+            continue
+        if r["report_type"] != report_type_for_date(vn_dt.date()):
+            continue
+        by_date[vn_dt.date()].append(r)
 
     # All senders who appeared at least once
     all_senders = sorted({r["sender"] for r in parsed_reports if r.get("sender")})
@@ -648,7 +713,7 @@ def analyze_weekly(messages: list,
     member_names = sorted({
         (m.get("displayName") or "").strip()
         for m in group_members
-        if (m.get("displayName") or "").strip()
+        if _is_active_member(m) and (m.get("displayName") or "").strip()
     })
     member_set = set(member_names)
 
@@ -1023,7 +1088,7 @@ def write_weekly_excel(data: dict, group_members: list, path) -> None:
     member_names = sorted({
         (m.get("displayName") or "").strip()
         for m in group_members
-        if (m.get("displayName") or "").strip()
+        if _is_active_member(m) and (m.get("displayName") or "").strip()
     })
 
     def _row_for(name: str):
@@ -1350,8 +1415,14 @@ Ví dụ:
         target_date = args.date or datetime.fromtimestamp(
             _time.time() + 7 * 3600, tz=timezone.utc
         ).strftime("%Y-%m-%d")
+        rtype = report_type_for_date(
+            datetime.strptime(target_date, "%Y-%m-%d").date()
+        )
         asm_data["missing_reporters"] = check_asm_compliance(
-            parsed_reports, members, target_date, args.asm_deadline, skip_list,
+            parsed_reports, members, target_date,
+            report_type=rtype,
+            deadline_hhmm=args.asm_deadline,
+            skip_list=skip_list,
         )
 
     # ── Output

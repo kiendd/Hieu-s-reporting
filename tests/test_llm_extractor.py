@@ -469,7 +469,11 @@ def test_extract_all_reports_parallel_stats_thread_safe(
             "type": "TEXT",
             "createdAt": f"2026-04-21T10:00:{i:02d}Z",
             "user": {"id": f"u{i}", "displayName": f"User{i}"},
-            "content": f"Shop {i:05d}: 5 cọc, ra tiêm 2",
+            "content": (
+                f"Dạ em gửi báo cáo Shop {i:05d} ngày 21/04: "
+                f"5 cọc | 12 KH tư vấn | ra tiêm 2 | tích cực: tốt | "
+                f"vấn đề: không | kế hoạch ngày mai: tiếp tục"
+            ),
         })
         fake_openai.chat.completions.queue.append({
             "reports": [{
