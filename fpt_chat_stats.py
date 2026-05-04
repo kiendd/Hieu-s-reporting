@@ -287,11 +287,14 @@ def detect_report_candidates(messages: list) -> list:
 
     Cheap signal — LLM extraction phía sau quyết định loại + parse fields.
     Diacritic-insensitive keyword match (user gõ thiếu dấu vẫn pass).
+
+    Accepts both ``TEXT`` và ``MEDIA`` (báo cáo có ảnh kèm vẫn có report
+    text trong ``content``). Pure-attachment messages tự rớt ở length gate.
     """
     out = []
     digit_re = re.compile(r"\d")
     for msg in messages:
-        if msg.get("type") != "TEXT":
+        if msg.get("type") not in ("TEXT", "MEDIA"):
             continue
         content = msg.get("content") or ""
         if len(content) < 80:

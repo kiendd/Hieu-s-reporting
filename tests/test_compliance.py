@@ -51,9 +51,23 @@ class TestDetectReportCandidates:
                 "ra tiem: 3 - kế hoạch ngày mai: tăng tư vấn") + "x" * 20
         assert detect_report_candidates([_msg(text)]) == [_msg(text)]
 
-    def test_drops_non_text_message_type(self):
+    def test_drops_unknown_message_type(self):
         text = "Shop ABC: 5 cọc, 12 KH tư vấn, ra tiêm 3, đã làm tốt" + "x" * 50
         assert detect_report_candidates([_msg(text, msg_type="IMAGE")]) == []
+        assert detect_report_candidates([_msg(text, msg_type="MESSAGE_NOTIFY")]) == []
+
+    def test_keeps_media_with_report_text(self):
+        # Regression: prod report attached an image (type=MEDIA) but full report
+        # text sits in `content`. Old TEXT-only gate dropped it before LLM.
+        text = ("Dạ em Báo Cáo Đánh giá nhanh shop:  LC HCM 92 Đường Số 1. "
+                "Kết quả: 9 cọc | 150 KH tiếp | 0 KH tiêm. "
+                "Tích cực: 2/4 nhân sự về 100%. Vấn đề: 16% tiến độ chậm.")
+        assert detect_report_candidates([_msg(text, msg_type="MEDIA")]) == [_msg(text, msg_type="MEDIA")]
+
+    def test_drops_pure_attachment_media(self):
+        # MEDIA without caption (content empty/short) still rejected by length gate.
+        assert detect_report_candidates([_msg("", msg_type="MEDIA")]) == []
+        assert detect_report_candidates([_msg("nice 📸", msg_type="MEDIA")]) == []
 
     def test_strip_diacritics(self):
         assert _strip_diacritics("Cọc Việt Nam") == "coc viet nam"
