@@ -39,8 +39,8 @@ def test_report_typeddict_fields_present():
     assert r["report_type"] == "daily_shop_vt"
 
 
-def test_prompt_version_is_v1():
-    assert PROMPT_VERSION == "v1"
+def test_prompt_version_is_v2():
+    assert PROMPT_VERSION == "v2"
 
 
 def test_cache_key_is_stable():
