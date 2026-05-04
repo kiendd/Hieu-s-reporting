@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 DEFAULT_MODEL = "gpt-5.4-mini"
 DEFAULT_STRUCTURED_OUTPUTS = True
 DEFAULT_MAX_WORKERS = 4
