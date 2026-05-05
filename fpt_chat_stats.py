@@ -343,6 +343,8 @@ def analyze_asm_reports(parsed_reports: list,
     total_ra_tiem  = 0
 
     for r in parsed_reports:
+        if not r.get("shop_ref"):
+            continue
         dep = r.get("deposit_count")
         if dep is not None:
             total_deposits += dep
